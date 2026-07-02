@@ -1,4 +1,4 @@
-import { PrismaClient, BookingStatus } from '@prisma/client';
+import { PrismaClient, BookingStatus, Flight } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -10,14 +10,15 @@ async function main() {
   await prisma.passenger.deleteMany();
 
   console.log('Seeding flights...');
-  const routes = [
-    { origin: 'BOM', destination: 'DEL' },
-    { origin: 'DEL', destination: 'BOM' },
-    { origin: 'BLR', destination: 'DEL' },
-    { origin: 'DEL', destination: 'BLR' },
-    { origin: 'BOM', destination: 'BLR' },
-    { origin: 'BLR', destination: 'BOM' },
-  ];
+  // All ordered pairs of these airports get flights (30 routes).
+  // BOM->DEL stays first so createdFlights[0] keeps backing demo PNR BW9001.
+  const airports = ['BOM', 'DEL', 'BLR', 'AMD', 'HYD', 'MAA'];
+  const routes: { origin: string; destination: string }[] = [];
+  for (const origin of airports) {
+    for (const destination of airports) {
+      if (origin !== destination) routes.push({ origin, destination });
+    }
+  }
 
   const flightsData = [];
   const baseTime = new Date();
@@ -54,7 +55,7 @@ async function main() {
     }
   }
 
-  const createdFlights = [];
+  const createdFlights: Flight[] = [];
   for (const f of flightsData) {
     const flight = await prisma.flight.create({ data: f });
     createdFlights.push(flight);
@@ -78,36 +79,46 @@ async function main() {
   console.log(`Seeded ${createdPassengers.length} passengers.`);
 
   console.log('Seeding bookings...');
+  // Demo bookings pick day-0 flights by route (created in day/route/timing order,
+  // so the first match for a route is always day 0).
+  const flightFor = (origin: string, destination: string, evening = false) =>
+    createdFlights.find(
+      (f) =>
+        f.origin === origin &&
+        f.destination === destination &&
+        f.departureTime.getHours() === (evening ? 18 : 8)
+    )!;
+
   const pnrs = ['BW9001', 'BW9002', 'BW9003', 'BW9004', 'BW9005'];
   const bookingsData = [
     {
       pnr: pnrs[0],
       passengerId: createdPassengers[0].id,
-      flightId: createdFlights[0].id, // BOM -> DEL, day 0 morning
+      flightId: flightFor('BOM', 'DEL').id, // day 0 morning
       status: BookingStatus.CONFIRMED,
     },
     {
       pnr: pnrs[1],
       passengerId: createdPassengers[1].id,
-      flightId: createdFlights[2].id, // BLR -> DEL, day 0 morning
+      flightId: flightFor('BLR', 'DEL').id, // day 0 morning
       status: BookingStatus.CONFIRMED,
     },
     {
       pnr: pnrs[2],
       passengerId: createdPassengers[2].id,
-      flightId: createdFlights[4].id, // BOM -> BLR, day 0 morning
+      flightId: flightFor('BOM', 'BLR').id, // day 0 morning
       status: BookingStatus.CONFIRMED,
     },
     {
       pnr: pnrs[3],
       passengerId: createdPassengers[3].id,
-      flightId: createdFlights[1].id, // DEL -> BOM, day 0 evening
+      flightId: flightFor('DEL', 'BOM', true).id, // day 0 evening
       status: BookingStatus.CONFIRMED,
     },
     {
       pnr: pnrs[4],
       passengerId: createdPassengers[4].id,
-      flightId: createdFlights[3].id, // DEL -> BLR, day 0 evening
+      flightId: flightFor('DEL', 'BLR', true).id, // day 0 evening
       status: BookingStatus.CANCELLED,
     },
   ];

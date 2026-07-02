@@ -41,13 +41,23 @@ Validated with zod (`MessagePayloadSchema`). Invalid payloads → `400 {"error":
     "auth": { "verified": false },
     "consecutiveFailedParses": 0
   },
-  "agentHandoff": false
+  "agentHandoff": false,
+  "suggestions": ["Check status", "Book a flight", "Reschedule", "Cancel booking", "Talk to an agent"]
 }
 ```
 
 - `reply` uses WhatsApp text conventions (`*bold*`, emoji, newlines).
-- `agentHandoff: true` means the session is parked for a human agent; subsequent
-  messages get a holding reply until the session is cleared.
+- `suggestions` are quick-reply chips for the current conversation point (menu
+  options when idle, `Yes`/`No` at the cancel confirmation, `Back to menu` during
+  handoff). The PWA renders them as tappable buttons; WhatsApp ignores them since
+  the same options are numbered in the reply text.
+- `sessionState.auth` persists a successful PNR + last-name verification for the
+  rest of the session: starting another flow with the same PNR skips re-auth
+  (e.g. `status BW9001` → verify once → `cancel BW9001` goes straight to the
+  confirmation prompt). A different PNR requires verification again.
+- `agentHandoff: true` means the session is parked in a simulated agent queue;
+  subsequent messages get a simulated-agent holding reply. Typing `menu` (or
+  `resume`) leaves the queue, resets the session, and returns to the bot.
 - Unexpected processing errors still return `200` with a friendly `reply`
   (the bot never goes silent); only payload validation returns `400`.
 

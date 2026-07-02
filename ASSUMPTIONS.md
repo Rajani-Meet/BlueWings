@@ -6,21 +6,26 @@ to keep the locked 4-flow scope shippable without waiting on clarification.
 ## Product
 
 1. **PNR format** — `BW` + 4 digits (e.g. `BW9001`). Case-insensitive on input.
-2. **Auth = PNR + last name.** Matching the passenger's last name against the
-   booking is sufficient identity verification for the MVP. No OTP/SMS is sent
-   (the brief's "mock OTP" is realized as this lighter check; real OTP is listed
-   in FUTURE_ENHANCEMENTS).
+2. **Auth = PNR + last name, verified once per session.** Matching the
+   passenger's last name against the booking is sufficient identity verification
+   for the MVP. A successful verification is remembered in the session, so
+   servicing the same PNR again (status → cancel → reschedule) never re-asks the
+   last name; a different PNR requires verification again. Booking a new flight
+   also marks the session verified for the new PNR. No OTP/SMS is sent (real OTP
+   is listed in FUTURE_ENHANCEMENTS).
 3. **Payments always succeed.** `payment.service` returns success with a generated
-   transaction ID. Refunds are a fixed simulated amount (Rs. 4500) with a fake
-   transaction reference — no fare rules or cancellation fees.
+   transaction ID. Cancellation refunds the full fare of the booked flight with a
+   fake transaction reference — no fare rules or cancellation fees.
 4. **Gate assignment is simulated** deterministically from the PNR (stable per
    booking), since mock flights have no real gate data.
 5. **One active conversation per (channel, user).** A new intent mid-flow doesn't
    interrupt the current flow; users complete or abandon a flow (or type 'agent').
-6. **Agent handoff is UI state only** — a flag + holding message. No queue,
-   routing, or human console. Handoff triggers: explicit request ("agent",
-   "human", ...), cancellation-dispute keywords at the cancel-confirm step
-   ("fee", "dispute", "unfair", ...), or 2 consecutive failed intent parses.
+6. **Agent handoff is a simulated queue** — a flag + simulated-agent holding
+   message. No real routing or human console. Handoff triggers: explicit request
+   ("agent", "human", ...), cancellation-dispute keywords at the cancel-confirm
+   step ("fee", "dispute", "unfair", ...), or 2 consecutive failed intent parses.
+   The user can leave the queue at any time by typing 'menu' (or tapping the
+   *Back to menu* chip), which resets the session and resumes the bot.
 7. **Dates are IST-rendered** (`Asia/Kolkata`) since BlueWings routes are Indian
    domestic (BOM/DEL/BLR). Travel dates are entered as `YYYY-MM-DD`.
 8. **Reschedule keeps the same route** (origin/destination of the original

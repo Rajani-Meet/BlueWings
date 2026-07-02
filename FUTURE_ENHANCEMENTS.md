@@ -14,11 +14,11 @@ Out of scope for the MVP (locked to 4 flows), logged here instead of built.
 - Flight change notifications (delay/gate change pushed proactively)
 - Multi-lingual support and language auto-detection
 
-## Agent handoff (currently UI-state only)
+## Agent handoff (currently a simulated queue)
 
 - Real agent queue with a human console (n8n could route to Slack/Zendesk)
 - Conversation transcript handed to the agent
-- Post-handoff resolution flow returning the user to the bot
+- Agent-initiated resolution (the user-initiated 'menu' return to the bot exists)
 
 ## Technical
 

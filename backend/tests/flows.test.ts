@@ -150,13 +150,31 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     await prisma.passenger.delete({ where: { id: booking!.passengerId } });
   });
 
-  it('reports when no flights exist for the route/date', async () => {
+  it('reports when no flights exist for the route/date, with available date range', async () => {
     await say('book-2', 'book');
     await say('book-2', 'TQA');
     await say('book-2', 'TQB');
     const res = await say('book-2', '2031-01-01');
 
     expect(res.reply).toContain('no flights found');
+    expect(res.reply).toContain('available between'); // points at dates that do have flights
+  });
+
+  it('rejects an unserved origin and lists the airports we fly from', async () => {
+    await say('book-3', 'book');
+    const res = await say('book-3', 'QQQ');
+
+    expect(res.reply).toContain("doesn't operate from *QQQ*");
+    expect(res.reply).toContain('TQA');
+  });
+
+  it('rejects an unserved route and lists the destinations, instead of a date loop', async () => {
+    await say('book-4', 'book');
+    await say('book-4', 'TQA');
+    const res = await say('book-4', 'ZZZ');
+
+    expect(res.reply).toContain("doesn't fly *TQA ➔ ZZZ*");
+    expect(res.reply).toContain('TQB'); // the destinations actually served from TQA
   });
 });
 
@@ -187,6 +205,7 @@ describe('Flow 4: cancel (PNR -> confirm -> simulated refund)', () => {
     const res = await say('cancel-1', 'yes');
     expect(res.reply).toContain('Cancelled Successfully');
     expect(res.reply).toContain('Refund');
+    expect(res.reply).toContain('Rs. 5000'); // simulated refund = actual fare of flight TS901
 
     const booking = await prisma.booking.findUnique({ where: { pnr: 'BW9703' } });
     expect(booking!.status).toBe('CANCELLED');
@@ -224,5 +243,73 @@ describe('Agent handoff triggers', () => {
     const res = await say('handoff-2', 'hello?');
     expect(res.agentHandoff).toBe(true);
     expect(res.reply).toContain('representative');
+  });
+
+  it("returns to the bot when the user types 'menu' after handoff", async () => {
+    const back = await say('handoff-2', 'menu');
+    expect(back.agentHandoff).toBe(false);
+    expect(back.reply).toContain('back with the BlueWings assistant');
+
+    // The bot is fully functional again afterwards.
+    const followup = await say('handoff-2', 'status');
+    expect(followup.agentHandoff).toBe(false);
+    expect(followup.reply).toContain('PNR');
+  });
+});
+
+describe('Session-persistent authentication (verify once per session)', () => {
+  it('skips re-auth when a flow starts with an already-verified PNR', async () => {
+    await say('auth-1', 'status');
+    await say('auth-1', 'BW9701');
+    const verified = await say('auth-1', 'Alpha');
+    expect(verified.reply).toContain('Flight Status for PNR: BW9701');
+
+    // Same session, same PNR: cancel jumps straight to the confirmation prompt.
+    const res = await say('auth-1', 'cancel my booking BW9701');
+    expect(res.reply).toContain('Confirm Cancellation');
+
+    const aborted = await say('auth-1', 'no');
+    expect(aborted.reply).toContain('aborted');
+  });
+
+  it('skips re-auth when the verified PNR is entered mid-flow', async () => {
+    await say('auth-2', 'check status of BW9701');
+    await say('auth-2', 'Alpha');
+
+    await say('auth-2', 'reschedule');
+    const res = await say('auth-2', 'BW9701');
+    expect(res.reply).toContain('What new date');
+  });
+
+  it('still asks for the last name for a different, unverified PNR', async () => {
+    await say('auth-3', 'status');
+    await say('auth-3', 'BW9701');
+    await say('auth-3', 'Alpha'); // verified for BW9701 only
+
+    await say('auth-3', 'cancel');
+    const res = await say('auth-3', 'BW9702');
+    expect(res.reply).toContain('last name');
+  });
+});
+
+describe('Quick-reply suggestions', () => {
+  it('offers the menu chips when idle', async () => {
+    const idle = await say('sugg-1', 'hello there');
+    expect(idle.suggestions).toContain('Check status');
+    expect(idle.suggestions).toContain('Talk to an agent');
+  });
+
+  it('offers Yes/No at the cancellation confirmation', async () => {
+    await say('sugg-1', 'cancel');
+    await say('sugg-1', 'BW9701');
+    const confirm = await say('sugg-1', 'Alpha');
+    expect(confirm.suggestions).toEqual(['Yes', 'No']);
+    await say('sugg-1', 'no');
+  });
+
+  it('offers a way back to the menu during agent handoff', async () => {
+    const res = await say('sugg-2', 'talk to an agent please');
+    expect(res.agentHandoff).toBe(true);
+    expect(res.suggestions).toEqual(['Back to menu']);
   });
 });

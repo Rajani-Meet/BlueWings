@@ -7,9 +7,19 @@ WhatsApp + PWA chat interface where passengers can **check booking status, book,
 1. **Check booking status** — PNR + last name → status / gate / timing
 2. **Book a new flight** — search → pick option → simulated payment → PNR
 3. **Reschedule** — PNR → alternatives → confirm
-4. **Cancel** — PNR → confirm → simulated refund
+4. **Cancel** — PNR → confirm → simulated refund (full fare)
 
-Agent handoff (UI state, no real queue) triggers on: requests outside these flows, cancellation disputes, or 2 consecutive failed intent parses.
+**Authentication**: PNR + last name, verified **once per session** — servicing the
+same PNR again (e.g. status check, then cancel) skips re-auth; a new booking marks
+the session verified for its PNR.
+
+**Agent handoff** (simulated queue) triggers on: explicit request, cancellation
+disputes, or 2 consecutive failed intent parses. Typing `menu` (or tapping the
+*Back to menu* chip) returns the user to the bot.
+
+**CX**: the PWA renders backend-suggested **quick-reply chips** (menu options,
+Yes/No confirmations), registers a **service worker** (installable, offline app
+shell), and shows typing indicators in a WhatsApp-style UI.
 
 ## Tech stack
 
