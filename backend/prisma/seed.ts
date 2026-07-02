@@ -12,13 +12,14 @@ async function main() {
   console.log('Seeding flights...');
   // All ordered pairs of these airports get flights (30 routes).
   // BOM->DEL stays first so createdFlights[0] keeps backing demo PNR BW9001.
-  const airports = ['BOM', 'DEL', 'BLR', 'AMD', 'HYD', 'MAA'];
+  const airports = ['BOM', 'DEL', 'BLR', 'AMD', 'HYD', 'MAA', 'CCU', 'PNQ', 'COK', 'JAI', 'GOI', 'LKO'];
   const routes: { origin: string; destination: string }[] = [];
   for (const origin of airports) {
     for (const destination of airports) {
       if (origin !== destination) routes.push({ origin, destination });
     }
   }
+
 
   const flightsData = [];
   const baseTime = new Date();
