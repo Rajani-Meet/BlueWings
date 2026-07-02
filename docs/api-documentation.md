@@ -58,6 +58,26 @@ Validated with zod (`MessagePayloadSchema`). Invalid payloads → `400 {"error":
 - `agentHandoff: true` means the session is parked in a simulated agent queue;
   subsequent messages get a simulated-agent holding reply. Typing `menu` (or
   `resume`) leaves the queue, resets the session, and returns to the bot.
+- `ticketUrl` (optional) is a relative link to the PDF e-ticket, returned after a
+  successful booking, reschedule, or status check of a non-cancelled booking. The
+  PWA renders it as a download button; WhatsApp ignores it.
+
+## GET /api/ticket/:pnr?lastName=<name>
+
+Generates and streams the branded **PDF e-ticket** for a booking (route, times,
+gate, seat, fare, barcode stub). Uses the same auth rule as the chat flows — the
+`lastName` query parameter must match the passenger on the booking.
+
+| Response | Meaning |
+|---|---|
+| `200` `application/pdf` | E-ticket streamed as an attachment (`BlueWings-E-Ticket-<PNR>.pdf`) |
+| `400` | PNR not in `BW0000` format |
+| `403` | Last name does not match the booking |
+| `404` | No booking with that PNR |
+
+```bash
+curl -o ticket.pdf "http://localhost:4000/api/ticket/BW9001?lastName=Doe"
+```
 - Unexpected processing errors still return `200` with a friendly `reply`
   (the bot never goes silent); only payload validation returns `400`.
 

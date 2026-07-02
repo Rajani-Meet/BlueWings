@@ -21,6 +21,11 @@ disputes, or 2 consecutive failed intent parses. Typing `menu` (or tapping the
 Yes/No confirmations), registers a **service worker** (installable, offline app
 shell), and shows typing indicators in a WhatsApp-style UI.
 
+**E-tickets**: every confirmed booking gets a branded **PDF e-ticket**
+(`GET /api/ticket/:pnr?lastName=…`, same PNR + last-name auth). The PWA shows a
+*Download e-ticket* button after booking, rescheduling, or a status check, so a
+lost ticket is one message away.
+
 ## Tech stack
 
 | Layer | Tech |
