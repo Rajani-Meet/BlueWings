@@ -6,6 +6,8 @@ export interface MessageBubbleProps {
   role: 'user' | 'bot';
   text: string;
   time: string;
+  /** When set, renders a download button for the e-ticket PDF under the text. */
+  ticketUrl?: string;
 }
 
 /** Render WhatsApp-style *bold* spans without dangerouslySetInnerHTML. */
@@ -19,7 +21,7 @@ function renderWhatsAppText(text: string): React.ReactNode[] {
   });
 }
 
-export default function MessageBubble({ role, text, time }: MessageBubbleProps) {
+export default function MessageBubble({ role, text, time, ticketUrl }: MessageBubbleProps) {
   return (
     <div className={`bubble-row ${role}`}>
       {role === 'bot' && (
@@ -29,6 +31,15 @@ export default function MessageBubble({ role, text, time }: MessageBubbleProps) 
       )}
       <div className={`bubble ${role}`}>
         <span>{renderWhatsAppText(text)}</span>
+        {ticketUrl && (
+          <a className="ticket-btn" href={ticketUrl} download>
+            <span className="ticket-btn-icon" aria-hidden="true">🎫</span>
+            <span>
+              Download e-ticket
+              <small>PDF · boarding details inside</small>
+            </span>
+          </a>
+        )}
         <span className="time">{time}</span>
       </div>
     </div>

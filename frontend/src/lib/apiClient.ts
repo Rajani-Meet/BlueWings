@@ -4,6 +4,8 @@ export interface BotResponse {
   agentHandoff: boolean;
   /** Quick-reply chips suggested by the backend for the next user turn. */
   suggestions?: string[];
+  /** Relative URL of a downloadable e-ticket PDF (after booking/reschedule/status). */
+  ticketUrl?: string;
 }
 
 export async function sendMessage(

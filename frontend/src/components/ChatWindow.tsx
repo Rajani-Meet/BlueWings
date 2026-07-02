@@ -11,6 +11,7 @@ interface ChatItem {
   text: string;
   time: string;
   suggestions?: string[];
+  ticketUrl?: string;
 }
 
 const MENU_SUGGESTIONS = ['Check status', 'Book a flight', 'Reschedule', 'Cancel booking', 'Talk to an agent'];
@@ -84,7 +85,7 @@ export default function ChatWindow() {
       const res = await sendMessage('PWA', getUserId(), text);
       setItems(prev => [
         ...prev,
-        { id: nextId.current++, role: 'bot', text: res.reply, time: nowTime(), suggestions: res.suggestions },
+        { id: nextId.current++, role: 'bot', text: res.reply, time: nowTime(), suggestions: res.suggestions, ticketUrl: res.ticketUrl },
       ]);
       if (res.agentHandoff && !handoff) {
         setHandoff(true);
@@ -149,7 +150,7 @@ export default function ChatWindow() {
           item.role === 'system' ? (
             <div key={item.id} className="system-banner">{item.text}</div>
           ) : (
-            <MessageBubble key={item.id} role={item.role} text={item.text} time={item.time} />
+            <MessageBubble key={item.id} role={item.role} text={item.text} time={item.time} ticketUrl={item.ticketUrl} />
           )
         )}
         {busy && <TypingIndicator />}

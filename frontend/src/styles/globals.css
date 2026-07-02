@@ -273,6 +273,47 @@ body::after  { width: 520px; height: 180px; bottom: 7%; right: 4%; background: r
 .bubble.user .time { color: rgba(255, 255, 255, 0.85); }
 .bubble.bot .time  { color: var(--muted); }
 
+/* ---- E-ticket download button (inside bot bubbles) ---- */
+.ticket-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 4px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--grad-brand);
+  color: #fff;
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  box-shadow: 0 10px 20px -10px rgba(33, 88, 232, 0.7);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.ticket-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 26px -10px rgba(33, 88, 232, 0.8);
+}
+.ticket-btn:active { transform: translateY(0); }
+.ticket-btn small {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.75);
+  margin-top: 1px;
+}
+.ticket-btn-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
 /* System banner (agent handoff) */
 .system-banner {
   align-self: center;
