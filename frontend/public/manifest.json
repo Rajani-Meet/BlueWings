@@ -1,0 +1,21 @@
+{
+  "name": "BlueWings Airlines Booking & Servicing",
+  "short_name": "BlueWings Chat",
+  "description": "WhatsApp-style conversational booking app for BlueWings Airlines",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#075e54",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
