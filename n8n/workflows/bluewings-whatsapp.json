@@ -1,0 +1,117 @@
+{
+  "name": "BlueWings WhatsApp Bot",
+  "id": "BlueWingsWA00001",
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Webhook Verify (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "b7f1e2d0-1111-4222-8333-444455556666"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.mode'] === 'subscribe' && $json.query['hub.verify_token'] === $env.WHATSAPP_VERIFY_TOKEN ? $json.query['hub.challenge'] : 'Forbidden' }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Respond Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Webhook Inbound (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "b7f1e2d0-7777-4888-8999-aaaabbbbcccc"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Translate Meta's webhook envelope into {from, text} items.\n// Status/delivery events (no `messages`) produce no items.\nconst out = [];\nfor (const item of $input.all()) {\n  const body = item.json.body ?? item.json;\n  for (const entry of body?.entry ?? []) {\n    for (const change of entry?.changes ?? []) {\n      for (const msg of change?.value?.messages ?? []) {\n        if (!msg?.from) continue;\n        const text = msg.type === 'text' && msg.text?.body ? msg.text.body : '';\n        out.push({ json: { from: msg.from, text } });\n      }\n    }\n  }\n}\nreturn out;"
+      },
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Extract Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_INTERNAL_URL }}/api/message",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: 'WHATSAPP', userId: $json.from, message: $json.text }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Call BlueWings Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v20.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: $('Extract Messages').item.json.from, type: 'text', text: { body: $json.reply } }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "Send WhatsApp Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Verify (GET)": {
+      "main": [[{ "node": "Respond Challenge", "type": "main", "index": 0 }]]
+    },
+    "Webhook Inbound (POST)": {
+      "main": [[{ "node": "Extract Messages", "type": "main", "index": 0 }]]
+    },
+    "Extract Messages": {
+      "main": [[{ "node": "Call BlueWings Backend", "type": "main", "index": 0 }]]
+    },
+    "Call BlueWings Backend": {
+      "main": [[{ "node": "Send WhatsApp Reply", "type": "main", "index": 0 }]]
+    }
+  }
+}

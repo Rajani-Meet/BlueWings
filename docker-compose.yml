@@ -1,0 +1,73 @@
+name: bluewings
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bluewings
+    ports:
+      - "5433:5432" # 5433 on host — local PostgreSQL 18 already owns 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bluewings"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/bluewings?schema=public
+      PORT: 4000
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-oss-120b:free,nvidia/nemotron-3-super-120b-a12b:free,openai/gpt-oss-20b:free}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-bluewings_verify_token_12345}
+      SEED_ON_START: ${SEED_ON_START:-true} # demo convenience: reseed mock data on boot
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:4000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5679:5678" # 5679 on host — another local project already uses 5678
+    environment:
+      N8N_SECURE_COOKIE: "false" # allow login over plain http://localhost:5679
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false" # workflow reads WA creds/backend URL via $env
+      GENERIC_TIMEZONE: Asia/Kolkata
+      # Used inside the workflow via $env
+      BACKEND_INTERNAL_URL: http://backend:4000
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-bluewings_verify_token_12345}
+      # Set this to your ngrok/public URL when exposing the webhook to Meta
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5679}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    # Import (idempotent — fixed workflow IDs), activate, then start
+    entrypoint: /bin/sh
+    command: -c "n8n import:workflow --input=/workflows/bluewings-whatsapp.json && n8n update:workflow --id BlueWingsWA00001 --active=true && exec n8n start"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  n8n_data:

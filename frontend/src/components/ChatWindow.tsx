@@ -1,12 +1,131 @@
 'use client';
 
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import MessageBubble from './MessageBubble';
+import TypingIndicator from './TypingIndicator';
+import { sendMessage } from '../lib/apiClient';
+
+interface ChatItem {
+  id: number;
+  role: 'user' | 'bot' | 'system';
+  text: string;
+  time: string;
+}
+
+const WELCOME_TEXT =
+  'Hello! I am your BlueWings Airlines assistant. ✈️\n\n' +
+  'How can I help you today? You can choose from:\n' +
+  "1. *Check booking status* (type 'status')\n" +
+  "2. *Book a new flight* (type 'book')\n" +
+  "3. *Reschedule flight* (type 'reschedule')\n" +
+  "4. *Cancel booking* (type 'cancel')\n" +
+  "5. *Talk to an agent* (type 'agent')";
+
+function nowTime(): string {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Stable per-browser user id so the backend keeps one conversation session. */
+function getUserId(): string {
+  const KEY = 'bluewings-user-id';
+  let id = localStorage.getItem(KEY);
+  if (!id) {
+    id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `web-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(KEY, id);
+  }
+  return id;
+}
 
 export default function ChatWindow() {
+  const [items, setItems] = useState<ChatItem[]>([
+    { id: 0, role: 'bot', text: WELCOME_TEXT, time: nowTime() },
+  ]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [handoff, setHandoff] = useState(false);
+  const nextId = useRef(1);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [items, busy]);
+
+  const submit = useCallback(async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput('');
+    setItems(prev => [...prev, { id: nextId.current++, role: 'user', text, time: nowTime() }]);
+    setBusy(true);
+
+    try {
+      const res = await sendMessage('PWA', getUserId(), text);
+      setItems(prev => [...prev, { id: nextId.current++, role: 'bot', text: res.reply, time: nowTime() }]);
+      if (res.agentHandoff && !handoff) {
+        setHandoff(true);
+        setItems(prev => [
+          ...prev,
+          { id: nextId.current++, role: 'system', text: 'You have been placed in the agent queue 👩‍💼', time: nowTime() },
+        ]);
+      }
+    } catch {
+      setItems(prev => [
+        ...prev,
+        {
+          id: nextId.current++,
+          role: 'bot',
+          text: "Sorry, I couldn't reach BlueWings right now. Please check your connection and try again.",
+          time: nowTime(),
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }, [input, busy, handoff]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void submit();
+    }
+  };
+
   return (
-    <div style={{ padding: '20px', fontFamily: 'Plus Jakarta Sans, sans-serif' }}>
-      <h1>BlueWings Chat MVP</h1>
-      <p>This is a stub for the chat interface. (Step 1 scaffold)</p>
+    <div className="chat-shell">
+      <header className="chat-header">
+        <div className="chat-avatar">✈️</div>
+        <div>
+          <div className="chat-title">BlueWings Airlines</div>
+          <div className="chat-subtitle">{handoff ? 'agent requested…' : 'online'}</div>
+        </div>
+      </header>
+
+      <div className="chat-messages" ref={scrollRef}>
+        {items.map(item =>
+          item.role === 'system' ? (
+            <div key={item.id} className="system-banner">{item.text}</div>
+          ) : (
+            <MessageBubble key={item.id} role={item.role} text={item.text} time={item.time} />
+          )
+        )}
+        {busy && <TypingIndicator />}
+      </div>
+
+      <div className="chat-composer">
+        <textarea
+          className="chat-input"
+          rows={1}
+          placeholder="Type a message"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          aria-label="Message"
+        />
+        <button className="send-btn" onClick={() => void submit()} disabled={busy || !input.trim()} aria-label="Send">
+          ➤
+        </button>
+      </div>
     </div>
   );
 }
