@@ -180,7 +180,17 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     expect(res.reply).toContain("doesn't fly *TQA ➔ ZZZ*");
     expect(res.reply).toContain('TQB'); // the destinations actually served from TQA
   });
+
+  it('resolves city names like "testcitya" or "testcityb" to airport codes', async () => {
+    await say('book-5', 'book');
+    const step2 = await say('book-5', 'testcitya');
+    expect(step2.reply).toContain('Flying from *TQA*');
+
+    const step3 = await say('book-5', 'testcityb');
+    expect(step3.reply).toContain('TQA ➔ TQB');
+  });
 });
+
 
 describe('Flow 3: reschedule (PNR -> alternatives -> confirm)', () => {
   it('reschedules to an alternative flight and updates the booking', async () => {

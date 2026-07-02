@@ -47,6 +47,39 @@ function isSessionVerifiedFor(state: SessionState, pnr: string | undefined): boo
   return !!(pnr && state.auth.verified && state.auth.pnr === pnr && state.auth.lastName);
 }
 
+const CITY_TO_AIRPORT: Record<string, string> = {
+  mumbai: 'BOM',
+  bombay: 'BOM',
+  delhi: 'DEL',
+  newdelhi: 'DEL',
+  bangalore: 'BLR',
+  bengaluru: 'BLR',
+  ahmedabad: 'AMD',
+  hyderabad: 'HYD',
+  chennai: 'MAA',
+  madras: 'MAA',
+  kolkata: 'CCU',
+  calcutta: 'CCU',
+  pune: 'PNQ',
+  kochi: 'COK',
+  cochin: 'COK',
+  jaipur: 'JAI',
+  goa: 'GOI',
+  lucknow: 'LKO',
+  testcitya: 'TQA',
+  testcityb: 'TQB'
+};
+
+
+function resolveAirportCode(input: string): string {
+  const cleaned = input.toLowerCase().trim().replace(/\s+/g, '');
+  if (CITY_TO_AIRPORT[cleaned]) {
+    return CITY_TO_AIRPORT[cleaned];
+  }
+  return input.toUpperCase().trim();
+}
+
+
 /** Quick-reply chips for the current conversation point. */
 function buildSuggestions(result: MessageResult): string[] {
   if (result.agentHandoff) return ['Back to menu'];
@@ -507,18 +540,18 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
 
       // 1. Collect origin airport
       if (state.step === 1) {
-        const code = message.trim().toUpperCase();
+        const code = resolveAirportCode(message);
         if (!airportRegex.test(code)) {
-          reply = "Please enter a valid 3-letter departure airport code (e.g., BOM, DEL, BLR).";
+          reply = "Please enter a valid departure city (e.g., Mumbai, Delhi) or its 3-letter airport code (e.g., BOM, DEL).";
         } else if ((await bookingService.listDestinations(code)).length === 0) {
           const origins = await bookingService.listOrigins();
           reply = `Sorry, BlueWings doesn't operate from *${code}* right now. ✈️\n\n` +
                   `We currently fly from: *${origins.join(', ')}*.\n` +
-                  `Please enter one of these 3-letter airport codes.`;
+                  `Please enter one of these cities or airport codes.`;
         } else {
           state.slots.origin = code;
           state.step = 2;
-          reply = `Flying from *${code}*. Which city are you flying *to*? Reply with the 3-letter airport code.`;
+          reply = `Flying from *${code}*. Which city are you flying *to*? Reply with the city name or its 3-letter airport code.`;
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
@@ -527,11 +560,11 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
 
       // 2. Collect destination airport
       if (state.step === 2) {
-        const code = message.trim().toUpperCase();
+        const code = resolveAirportCode(message);
         if (!airportRegex.test(code)) {
-          reply = "Please enter a valid 3-letter destination airport code (e.g., BOM, DEL, BLR).";
+          reply = "Please enter a valid destination city (e.g., Bangalore, Chennai) or its 3-letter airport code (e.g., BLR, MAA).";
         } else if (code === state.slots.origin) {
-          reply = "Destination must be different from your departure city. Please enter a different 3-letter airport code.";
+          reply = "Destination must be different from your departure city. Please enter a different city or airport code.";
         } else {
           const destinations = await bookingService.listDestinations(state.slots.origin!);
           if (!destinations.includes(code)) {
@@ -768,7 +801,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
       else if (intent === 'BOOK') {
         state.currentFlow = 'BOOK';
         state.step = 1;
-        reply = "Great, let's book a new flight! ✈️\n\nWhich city are you flying *from*? Please reply with the 3-letter airport code (e.g., BOM, DEL, BLR).";
+        reply = "Great, let's book a new flight! ✈️\n\nWhich city are you flying *from*? Please reply with the city name (e.g., Mumbai, Delhi) or its 3-letter airport code (e.g., BOM, DEL).";
       }
 
       else {
