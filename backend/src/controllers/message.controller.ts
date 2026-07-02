@@ -5,6 +5,7 @@ import { sessionService, SessionState } from '../services/session.service';
 import { parseIntent } from '../services/intentRouter.service';
 import { bookingService } from '../services/booking.service';
 import { agentHandoffService } from '../services/agentHandoff.service';
+import { paymentService } from '../services/payment.service';
 
 export async function handleMessage(req: Request, res: Response) {
   try {
@@ -393,8 +394,171 @@ export async function handleMessage(req: Request, res: Response) {
           state.slots = {};
         }
       }
-    } 
-    
+    }
+
+    else if (state.currentFlow === 'BOOK') {
+      const airportRegex = /^[A-Z]{3}$/;
+
+      // 1. Collect origin airport
+      if (state.step === 1) {
+        const code = message.trim().toUpperCase();
+        if (!airportRegex.test(code)) {
+          reply = "Please enter a valid 3-letter departure airport code (e.g., BOM, DEL, BLR).";
+        } else {
+          state.slots.origin = code;
+          state.step = 2;
+          reply = `Flying from *${code}*. Which city are you flying *to*? Reply with the 3-letter airport code.`;
+        }
+        await sessionService.updateSessionState(sessionId, state);
+        logger.logMessage('OUTBOUND', userId, reply);
+        return res.json({ reply, sessionState: state, agentHandoff: false });
+      }
+
+      // 2. Collect destination airport
+      if (state.step === 2) {
+        const code = message.trim().toUpperCase();
+        if (!airportRegex.test(code)) {
+          reply = "Please enter a valid 3-letter destination airport code (e.g., BOM, DEL, BLR).";
+        } else if (code === state.slots.origin) {
+          reply = "Destination must be different from your departure city. Please enter a different 3-letter airport code.";
+        } else {
+          state.slots.destination = code;
+          state.step = 3;
+          reply = `Great, *${state.slots.origin} ➔ ${code}*. What date would you like to fly? (Use format *YYYY-MM-DD*, e.g., 2026-07-05).`;
+        }
+        await sessionService.updateSessionState(sessionId, state);
+        logger.logMessage('OUTBOUND', userId, reply);
+        return res.json({ reply, sessionState: state, agentHandoff: false });
+      }
+
+      // 3. Collect date and show flight options
+      if (state.step === 3) {
+        const inputDate = message.trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(inputDate)) {
+          reply = "Invalid date format. Please specify the date in *YYYY-MM-DD* format (e.g., 2026-07-05).";
+          await sessionService.updateSessionState(sessionId, state);
+          logger.logMessage('OUTBOUND', userId, reply);
+          return res.json({ reply, sessionState: state, agentHandoff: false });
+        }
+
+        const flights = await bookingService.searchFlights(state.slots.origin!, state.slots.destination!, inputDate);
+        if (flights.length === 0) {
+          reply = `Sorry, no flights found from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*.\n\n` +
+                  `Please try another date (YYYY-MM-DD), or type 'agent' to speak with a representative.`;
+        } else {
+          const flightOptions = flights.slice(0, 3);
+          state.slots.availableFlights = flightOptions.map(f => ({
+            id: f.id,
+            flightNumber: f.flightNumber,
+            departureTime: f.departureTime,
+            price: f.price
+          }));
+
+          let optionsText = `Here are the available flights from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*:\n\n`;
+          flightOptions.forEach((f, idx) => {
+            const depTime = new Date(f.departureTime).toLocaleTimeString('en-IN', {
+              timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit'
+            });
+            optionsText += `*${idx + 1}. ${f.flightNumber}* | Departs: ${depTime} | Price: Rs. ${f.price}\n`;
+          });
+          optionsText += `\nReply with the flight number you'd like to book (e.g., *${flightOptions[0].flightNumber}*).`;
+          reply = optionsText;
+          state.slots.date = inputDate;
+          state.step = 4;
+        }
+        await sessionService.updateSessionState(sessionId, state);
+        logger.logMessage('OUTBOUND', userId, reply);
+        return res.json({ reply, sessionState: state, agentHandoff: false });
+      }
+
+      // 4. Select a flight
+      if (state.step === 4) {
+        const inputFlightNum = message.toUpperCase().trim().replace(/\s+/g, '');
+        const available: any[] = state.slots.availableFlights || [];
+        const chosen = available.find(f => f.flightNumber.toUpperCase() === inputFlightNum);
+        if (!chosen) {
+          reply = `Invalid selection. Please type one of the listed flight numbers (e.g., *${available[0]?.flightNumber || 'BW100'}*).`;
+        } else {
+          state.slots.selectedFlightId = chosen.id;
+          state.slots.selectedFlightNumber = chosen.flightNumber;
+          state.slots.price = chosen.price;
+          state.step = 5;
+          reply = `You selected *${chosen.flightNumber}* (Rs. ${chosen.price}).\n\nTo complete the booking, please enter the passenger's *full name*.`;
+        }
+        await sessionService.updateSessionState(sessionId, state);
+        logger.logMessage('OUTBOUND', userId, reply);
+        return res.json({ reply, sessionState: state, agentHandoff: false });
+      }
+
+      // 5. Collect passenger full name
+      if (state.step === 5) {
+        const name = message.trim();
+        if (name.length < 2) {
+          reply = "Please enter a valid passenger full name.";
+        } else {
+          state.slots.passengerName = name;
+          state.step = 6;
+          reply = "Thanks! Please enter the passenger's *email address*.";
+        }
+        await sessionService.updateSessionState(sessionId, state);
+        logger.logMessage('OUTBOUND', userId, reply);
+        return res.json({ reply, sessionState: state, agentHandoff: false });
+      }
+
+      // 6. Collect email
+      if (state.step === 6) {
+        const email = message.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          reply = "That doesn't look like a valid email. Please enter a valid email address (e.g., name@example.com).";
+        } else {
+          state.slots.email = email;
+          state.step = 7;
+          reply = "Almost done! Please enter the passenger's *phone number* (with country code, e.g., +919999999999).";
+        }
+        await sessionService.updateSessionState(sessionId, state);
+        logger.logMessage('OUTBOUND', userId, reply);
+        return res.json({ reply, sessionState: state, agentHandoff: false });
+      }
+
+      // 7. Collect phone, simulate payment, create booking
+      if (state.step === 7) {
+        const phone = message.trim().replace(/\s+/g, '');
+        if (!/^\+?\d{7,15}$/.test(phone)) {
+          reply = "Please enter a valid phone number (7-15 digits, optional leading +, e.g., +919999999999).";
+          await sessionService.updateSessionState(sessionId, state);
+          logger.logMessage('OUTBOUND', userId, reply);
+          return res.json({ reply, sessionState: state, agentHandoff: false });
+        }
+
+        // Simulated payment (always succeeds in this MVP)
+        const payment = await paymentService.processPayment(state.slots.price || 0);
+        if (!payment.success) {
+          reply = "Payment could not be processed. Please try again later or type 'agent' for assistance.";
+          state.currentFlow = null;
+          state.slots = {};
+        } else {
+          const booking = await bookingService.createBooking(state.slots.selectedFlightId!, {
+            name: state.slots.passengerName!,
+            email: state.slots.email!,
+            phone
+          });
+          const depTime = new Date(booking.flight.departureTime).toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
+          });
+          reply = `✅ *Booking Confirmed!*\n\n` +
+                  `• *PNR*: ${booking.pnr}\n` +
+                  `• *Passenger*: ${booking.passenger.name}\n` +
+                  `• *Flight*: ${booking.flight.flightNumber} (${booking.flight.origin} ➔ ${booking.flight.destination})\n` +
+                  `• *Departure*: ${depTime}\n` +
+                  `• *Amount Paid*: Rs. ${state.slots.price}\n` +
+                  `• *Payment Ref*: ${payment.transactionId}\n\n` +
+                  `Keep your PNR *${booking.pnr}* handy to check status, reschedule, or cancel. Safe travels! ✈️`;
+          state.currentFlow = null;
+          state.slots = {};
+        }
+      }
+    }
+
     else {
       // Not in an active flow, handle initial intent
       if (intent === 'CHECK_STATUS') {
@@ -437,19 +601,20 @@ export async function handleMessage(req: Request, res: Response) {
         }
       }
       
+      else if (intent === 'BOOK') {
+        state.currentFlow = 'BOOK';
+        state.step = 1;
+        reply = "Great, let's book a new flight! ✈️\n\nWhich city are you flying *from*? Please reply with the 3-letter airport code (e.g., BOM, DEL, BLR).";
+      }
+
       else {
-        // Fallback for flows not implemented in this step
-        if (intent === 'BOOK') {
-          reply = "Flight booking flow is coming in Step 6. Try asking for 'status', 'reschedule', or 'cancel'!";
-        } else {
-          reply = "Hello! I am your BlueWings Airlines assistant. ✈️\n\n" +
+        reply = "Hello! I am your BlueWings Airlines assistant. ✈️\n\n" +
                   "How can I help you today? You can choose from:\n" +
                   "1. *Check booking status* (type 'status')\n" +
                   "2. *Book a new flight* (type 'book')\n" +
                   "3. *Reschedule flight* (type 'reschedule')\n" +
                   "4. *Cancel booking* (type 'cancel')\n" +
                   "5. *Talk to an agent* (type 'agent')";
-        }
       }
     }
 
