@@ -5,8 +5,9 @@ import ChatWindow from '../components/ChatWindow';
 
 export default function Home() {
   return (
-    <main style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <main className="app-container">
       <ChatWindow />
     </main>
   );
 }
+

@@ -15,6 +15,18 @@ interface ChatItem {
 
 const MENU_SUGGESTIONS = ['Check status', 'Book a flight', 'Reschedule', 'Cancel booking', 'Talk to an agent'];
 
+/** Small icons for known quick-reply chips (unknown chips render text-only). */
+const CHIP_ICONS: Record<string, string> = {
+  'Check status': '🔎',
+  'Book a flight': '✈️',
+  'Reschedule': '📅',
+  'Cancel booking': '🗑️',
+  'Talk to an agent': '💬',
+  'Back to menu': '↩️',
+  'Yes': '✅',
+  'No': '✖️',
+};
+
 const WELCOME_TEXT =
   'Hello! I am your BlueWings Airlines assistant. ✈️\n\n' +
   'How can I help you today? You can choose from:\n' +
@@ -120,10 +132,15 @@ export default function ChatWindow() {
   return (
     <div className="chat-shell">
       <header className="chat-header">
+        <div className="route-deco" aria-hidden="true"><span>✈️</span></div>
         <div className="chat-avatar">✈️</div>
         <div>
           <div className="chat-title">BlueWings Airlines</div>
-          <div className="chat-subtitle">{handoff ? 'agent requested…' : 'online'}</div>
+          <div className="chat-subtitle">Bookings · Reschedules · Cancellations</div>
+        </div>
+        <div className="status-pill">
+          <span className={handoff ? 'status-dot busy' : 'status-dot'} />
+          {handoff ? 'Agent requested…' : 'Online now'}
         </div>
       </header>
 
@@ -142,6 +159,7 @@ export default function ChatWindow() {
         <div className="quick-replies">
           {suggestions.map(s => (
             <button key={s} className="quick-reply" onClick={() => void send(s)}>
+              {CHIP_ICONS[s] && <span aria-hidden="true">{CHIP_ICONS[s]}</span>}
               {s}
             </button>
           ))}
@@ -159,7 +177,12 @@ export default function ChatWindow() {
           aria-label="Message"
         />
         <button className="send-btn" onClick={() => void submit()} disabled={busy || !input.trim()} aria-label="Send">
-          ➤
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path
+              d="M3.4 20.4 20.85 12.9c.83-.36.83-1.53 0-1.9L3.4 3.5c-.68-.3-1.43.2-1.43.94l-.01 4.63c0 .5.37.93.87.99L14 12 2.83 13.83c-.5.07-.87.5-.87 1l.01 4.63c0 .74.75 1.24 1.43.94Z"
+              fill="currentColor"
+            />
+          </svg>
         </button>
       </div>
     </div>

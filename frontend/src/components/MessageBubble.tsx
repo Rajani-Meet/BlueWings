@@ -22,6 +22,11 @@ function renderWhatsAppText(text: string): React.ReactNode[] {
 export default function MessageBubble({ role, text, time }: MessageBubbleProps) {
   return (
     <div className={`bubble-row ${role}`}>
+      {role === 'bot' && (
+        <div className="bot-avatar" aria-hidden="true">
+          ✈️
+        </div>
+      )}
       <div className={`bubble ${role}`}>
         <span>{renderWhatsAppText(text)}</span>
         <span className="time">{time}</span>

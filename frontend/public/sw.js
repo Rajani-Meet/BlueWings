@@ -1,9 +1,9 @@
 /* BlueWings PWA service worker: offline app-shell caching.
- * - Navigations: network-first, falling back to the cached shell when offline.
- * - Same-origin static assets: cache-first with background fill.
- * - /api/* is never cached (live conversation data).
+ * Strategy: network-first with cache fallback for all same-origin GETs, so fresh
+ * code always wins when online and the last good copy serves offline.
+ * /api/* is never cached (live conversation data).
  */
-const CACHE = 'bluewings-shell-v1';
+const CACHE = 'bluewings-shell-v2';
 const SHELL = ['/', '/manifest.json', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -23,34 +23,21 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
+  if (event.request.method !== 'GET') return;
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/')) return;
 
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request)
-        .then((res) => {
+  const cacheKey = event.request.mode === 'navigate' ? '/' : event.request;
+
+  event.respondWith(
+    fetch(event.request)
+      .then((res) => {
+        if (res.ok) {
           const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put('/', copy));
-          return res;
-        })
-        .catch(() => caches.match('/'))
-    );
-    return;
-  }
-
-  if (url.origin === self.location.origin) {
-    event.respondWith(
-      caches.match(event.request).then(
-        (hit) =>
-          hit ||
-          fetch(event.request).then((res) => {
-            if (res.ok) {
-              const copy = res.clone();
-              caches.open(CACHE).then((cache) => cache.put(event.request, copy));
-            }
-            return res;
-          })
-      )
-    );
-  }
+          caches.open(CACHE).then((cache) => cache.put(cacheKey, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(cacheKey))
+  );
 });
