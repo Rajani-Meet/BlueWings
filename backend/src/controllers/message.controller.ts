@@ -1,10 +1,9 @@
 import { Request, Response } from 'express';
 import { MessagePayloadSchema } from '../models/message.schema';
 import { logger } from '../utils/logger';
-import { sessionService, SessionState } from '../services/session.service';
-import { parseIntent } from '../services/intentRouter.service';
+import { sessionService } from '../services/session.service';
+import { parseIntent, keywordParseIntent } from '../services/intentRouter.service';
 import { bookingService } from '../services/booking.service';
-import { agentHandoffService } from '../services/agentHandoff.service';
 import { paymentService } from '../services/payment.service';
 
 export async function handleMessage(req: Request, res: Response) {
@@ -34,8 +33,13 @@ export async function handleMessage(req: Request, res: Response) {
     let reply = '';
     let agentHandoff = false;
 
-    // 3. Parse intent and slots from the user message
-    const parsed = await parseIntent(message);
+    // 3. Parse intent and slots from the user message.
+    // Mid-flow, inputs are slot values ("BOM", "Doe", "yes") consumed by the state
+    // machine — only the 'agent' escape hatch matters, which the keyword router
+    // catches. Skip the LLM there to avoid needless latency and API usage.
+    const parsed = state.currentFlow !== null
+      ? keywordParseIntent(message)
+      : await parseIntent(message);
     const intent = parsed.intent;
 
     // Handle consecutive failed intent parses (max 2 before handoff)
