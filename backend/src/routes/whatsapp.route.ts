@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { env } from '../config/env';
 import { handleWhatsAppWebhook, verifyWhatsAppWebhook } from '../adapters/whatsapp.adapter';
 
 const router = Router();

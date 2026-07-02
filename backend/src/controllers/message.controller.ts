@@ -1,16 +1,37 @@
 import { Request, Response } from 'express';
-import { MessagePayloadSchema } from '../models/message.schema';
+import { MessagePayload, MessagePayloadSchema } from '../models/message.schema';
 import { logger } from '../utils/logger';
-import { sessionService } from '../services/session.service';
+import { sessionService, SessionState } from '../services/session.service';
 import { parseIntent, keywordParseIntent } from '../services/intentRouter.service';
 import { bookingService } from '../services/booking.service';
 import { paymentService } from '../services/payment.service';
 
+export interface MessageResult {
+  reply: string;
+  sessionState: SessionState;
+  agentHandoff: boolean;
+}
+
+/** Express handler for POST /api/message (PWA + tests). Thin HTTP wrapper. */
 export async function handleMessage(req: Request, res: Response) {
   try {
-    // Validate request body
     const payload = MessagePayloadSchema.parse(req.body);
-    const { channel, userId, message } = payload;
+    const result = await processIncomingMessage(payload);
+    res.json(result);
+  } catch (error: any) {
+    // Only payload validation can throw here; processing errors are handled inside.
+    logger.error('Invalid /message payload', error);
+    res.status(400).json({ error: error.message || 'Invalid request format' });
+  }
+}
+
+/**
+ * Channel-agnostic core: takes a validated internal payload, returns the bot's
+ * response. Called by the HTTP route and by channel adapters (e.g. WhatsApp).
+ */
+export async function processIncomingMessage(payload: MessagePayload): Promise<MessageResult> {
+  const { channel, userId, message } = payload;
+  try {
 
     // 1. Get or create session
     const session = await sessionService.getOrCreateSession(channel, userId);
@@ -23,11 +44,7 @@ export async function handleMessage(req: Request, res: Response) {
     if (session.agentHandoffActive) {
       const handoffReply = "An agent has been requested. Connecting you to a BlueWings representative shortly...";
       logger.logMessage('OUTBOUND', userId, handoffReply);
-      return res.json({
-        reply: handoffReply,
-        sessionState: state,
-        agentHandoff: true
-      });
+      return { reply: handoffReply, sessionState: state, agentHandoff: true };
     }
 
     let reply = '';
@@ -51,11 +68,7 @@ export async function handleMessage(req: Request, res: Response) {
         logger.logMessage('OUTBOUND', userId, reply);
         state.consecutiveFailedParses = 0; // reset
         await sessionService.updateSessionState(sessionId, state);
-        return res.json({
-          reply,
-          sessionState: state,
-          agentHandoff: true
-        });
+        return { reply, sessionState: state, agentHandoff: true };
       }
     } else {
       if (intent !== 'UNKNOWN') {
@@ -68,11 +81,7 @@ export async function handleMessage(req: Request, res: Response) {
       await sessionService.setAgentHandoff(sessionId, true);
       reply = "Understood. I am connecting you to a BlueWings customer service agent...";
       logger.logMessage('OUTBOUND', userId, reply);
-      return res.json({
-        reply,
-        sessionState: state,
-        agentHandoff: true
-      });
+      return { reply, sessionState: state, agentHandoff: true };
     }
 
     // 5. Dialogue State Machine & Slot Filling
@@ -87,12 +96,12 @@ export async function handleMessage(req: Request, res: Response) {
           state.step = 2;
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         } else {
           reply = "Invalid PNR format. Please enter your PNR in the format BW1234 (e.g., BW9001).";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
       }
 
@@ -105,7 +114,7 @@ export async function handleMessage(req: Request, res: Response) {
           reply = "Please enter a valid passenger last name.";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
       }
 
@@ -153,12 +162,12 @@ export async function handleMessage(req: Request, res: Response) {
           state.step = 2;
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         } else {
           reply = "Invalid PNR format. Please enter your PNR in the format BW1234 (e.g., BW9001).";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
       }
 
@@ -171,7 +180,7 @@ export async function handleMessage(req: Request, res: Response) {
           reply = "Please enter a valid passenger last name.";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
       }
 
@@ -213,7 +222,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr, state.slots.lastName);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 4. Confirm or Abort
@@ -232,7 +241,7 @@ export async function handleMessage(req: Request, res: Response) {
           await sessionService.setAgentHandoff(sessionId, true);
           reply = "I see you have concerns about the cancellation policy or refund fees. I am transferring you to a customer service agent to assist you immediately...";
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: true });
+          return { reply, sessionState: state, agentHandoff: true };
         }
 
         if (normalizedMsg === 'yes' || normalizedMsg === 'confirm') {
@@ -266,12 +275,12 @@ export async function handleMessage(req: Request, res: Response) {
           state.step = 2;
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         } else {
           reply = "Invalid PNR format. Please enter your PNR in the format BW1234 (e.g., BW9001).";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
       }
 
@@ -284,7 +293,7 @@ export async function handleMessage(req: Request, res: Response) {
           reply = "Please enter a valid passenger last name.";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
       }
 
@@ -316,7 +325,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr, state.slots.lastName);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 4. Collect Date & Show Alternatives
@@ -327,7 +336,7 @@ export async function handleMessage(req: Request, res: Response) {
           reply = "Invalid date format. Please specify the date in *YYYY-MM-DD* format (e.g., 2026-07-03).";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
 
         try {
@@ -366,7 +375,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr, state.slots.lastName);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 5. Select Flight & Confirm
@@ -415,7 +424,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 2. Collect destination airport
@@ -432,7 +441,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 3. Collect date and show flight options
@@ -442,7 +451,7 @@ export async function handleMessage(req: Request, res: Response) {
           reply = "Invalid date format. Please specify the date in *YYYY-MM-DD* format (e.g., 2026-07-05).";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
 
         const flights = await bookingService.searchFlights(state.slots.origin!, state.slots.destination!, inputDate);
@@ -472,7 +481,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 4. Select a flight
@@ -491,7 +500,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 5. Collect passenger full name
@@ -506,7 +515,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 6. Collect email
@@ -521,7 +530,7 @@ export async function handleMessage(req: Request, res: Response) {
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
-        return res.json({ reply, sessionState: state, agentHandoff: false });
+        return { reply, sessionState: state, agentHandoff: false };
       }
 
       // 7. Collect phone, simulate payment, create booking
@@ -531,7 +540,7 @@ export async function handleMessage(req: Request, res: Response) {
           reply = "Please enter a valid phone number (7-15 digits, optional leading +, e.g., +919999999999).";
           await sessionService.updateSessionState(sessionId, state);
           logger.logMessage('OUTBOUND', userId, reply);
-          return res.json({ reply, sessionState: state, agentHandoff: false });
+          return { reply, sessionState: state, agentHandoff: false };
         }
 
         // Simulated payment (always succeeds in this MVP)
@@ -626,14 +635,15 @@ export async function handleMessage(req: Request, res: Response) {
     await sessionService.updateSessionState(sessionId, state);
     logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr, state.slots.lastName);
 
-    res.json({
-      reply,
-      sessionState: state,
-      agentHandoff
-    });
+    return { reply, sessionState: state, agentHandoff };
 
   } catch (error: any) {
-    logger.error('Error in message controller handler', error);
-    res.status(400).json({ error: error.message || 'Error processing request' });
+    // The bot must never go silent: any unexpected failure gets a friendly reply.
+    logger.error('Error processing message', error);
+    return {
+      reply: "Sorry, something went wrong on our end. Please try again in a moment, or type 'agent' to reach a representative.",
+      sessionState: { currentFlow: null, step: 0, slots: {}, auth: { verified: false }, consecutiveFailedParses: 0 },
+      agentHandoff: false
+    };
   }
 }
