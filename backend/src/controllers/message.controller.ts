@@ -10,6 +10,42 @@ export interface MessageResult {
   reply: string;
   sessionState: SessionState;
   agentHandoff: boolean;
+  /** Quick-reply chips for channels that support them (PWA renders buttons; WhatsApp ignores). */
+  suggestions?: string[];
+}
+
+const MENU_TEXT =
+  'How can I help you today? You can choose from:\n' +
+  "1. *Check booking status* (type 'status')\n" +
+  "2. *Book a new flight* (type 'book')\n" +
+  "3. *Reschedule flight* (type 'reschedule')\n" +
+  "4. *Cancel booking* (type 'cancel')\n" +
+  "5. *Talk to an agent* (type 'agent')";
+
+const MENU_SUGGESTIONS = ['Check status', 'Book a flight', 'Reschedule', 'Cancel booking', 'Talk to an agent'];
+
+const RETURN_TO_BOT_HINT = '\n\n_Type *menu* to return to the automated assistant at any time._';
+
+/** Matches an explicit request to leave the (simulated) agent queue and resume the bot. */
+const RESUME_BOT_REGEX = /\bmenu\b|\bresume\b|\bmain menu\b|\bstart over\b|back to (the )?(bot|menu|assistant)/;
+
+/** YYYY-MM-DD in IST, for pointing users at dates that have flights. */
+function ymdIST(date: Date): string {
+  return new Date(date).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/** True when this session already verified PNR + last name for exactly this PNR. */
+function isSessionVerifiedFor(state: SessionState, pnr: string | undefined): boolean {
+  return !!(pnr && state.auth.verified && state.auth.pnr === pnr && state.auth.lastName);
+}
+
+/** Quick-reply chips for the current conversation point. */
+function buildSuggestions(result: MessageResult): string[] {
+  if (result.agentHandoff) return ['Back to menu'];
+  const state = result.sessionState;
+  if (state.currentFlow === null) return MENU_SUGGESTIONS;
+  if (state.currentFlow === 'CANCEL' && state.step === 3) return ['Yes', 'No'];
+  return [];
 }
 
 /** Express handler for POST /api/message (PWA + tests). Thin HTTP wrapper. */
@@ -30,6 +66,11 @@ export async function handleMessage(req: Request, res: Response) {
  * response. Called by the HTTP route and by channel adapters (e.g. WhatsApp).
  */
 export async function processIncomingMessage(payload: MessagePayload): Promise<MessageResult> {
+  const result = await processCore(payload);
+  return { ...result, suggestions: buildSuggestions(result) };
+}
+
+async function processCore(payload: MessagePayload): Promise<MessageResult> {
   const { channel, userId, message } = payload;
   try {
 
@@ -40,9 +81,22 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
 
     logger.logMessage('INBOUND', userId, message, state.slots.pnr, state.slots.lastName);
 
-    // 2. Check if agent handoff is active
+    // 2. Check if agent handoff is active (simulated queue — no real agents in the MVP).
+    // The user can leave the queue and resume the bot at any time by typing 'menu'.
     if (session.agentHandoffActive) {
-      const handoffReply = "An agent has been requested. Connecting you to a BlueWings representative shortly...";
+      if (RESUME_BOT_REGEX.test(message.toLowerCase().trim())) {
+        await sessionService.clearSessionState(sessionId);
+        const resumeReply = "You're back with the BlueWings assistant. ✈️\n\n" + MENU_TEXT;
+        logger.logMessage('OUTBOUND', userId, resumeReply);
+        return {
+          reply: resumeReply,
+          sessionState: { currentFlow: null, step: 0, slots: {}, auth: { verified: false }, consecutiveFailedParses: 0 },
+          agentHandoff: false
+        };
+      }
+      const handoffReply =
+        '👩‍💼 *Agent (simulated)*: Thanks for waiting — a BlueWings representative has your conversation and will assist you right here.' +
+        RETURN_TO_BOT_HINT;
       logger.logMessage('OUTBOUND', userId, handoffReply);
       return { reply: handoffReply, sessionState: state, agentHandoff: true };
     }
@@ -64,7 +118,7 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
       state.consecutiveFailedParses += 1;
       if (state.consecutiveFailedParses >= 2) {
         await sessionService.setAgentHandoff(sessionId, true);
-        reply = "I'm having trouble understanding your request. Connecting you to an agent for support...";
+        reply = "I'm having trouble understanding your request. Connecting you to an agent for support..." + RETURN_TO_BOT_HINT;
         logger.logMessage('OUTBOUND', userId, reply);
         state.consecutiveFailedParses = 0; // reset
         await sessionService.updateSessionState(sessionId, state);
@@ -79,7 +133,7 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
     // 4. Handle Explicit Agent Handoff
     if (intent === 'AGENT_HANDOFF') {
       await sessionService.setAgentHandoff(sessionId, true);
-      reply = "Understood. I am connecting you to a BlueWings customer service agent...";
+      reply = "Understood. I am connecting you to a BlueWings customer service agent..." + RETURN_TO_BOT_HINT;
       logger.logMessage('OUTBOUND', userId, reply);
       return { reply, sessionState: state, agentHandoff: true };
     }
@@ -92,11 +146,16 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
         const inputPnr = message.toUpperCase().replace(/\s+/g, '');
         if (/^BW\d{4}$/.test(inputPnr)) {
           state.slots.pnr = inputPnr;
-          reply = `I found PNR *${inputPnr}*. Please enter the passenger's last name to verify your identity.`;
           state.step = 2;
-          await sessionService.updateSessionState(sessionId, state);
-          logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
-          return { reply, sessionState: state, agentHandoff: false };
+          if (isSessionVerifiedFor(state, inputPnr)) {
+            // Already verified for this PNR in this session — skip re-auth, fall through.
+            state.slots.lastName = state.auth.lastName;
+          } else {
+            reply = `I found PNR *${inputPnr}*. Please enter the passenger's last name to verify your identity.`;
+            await sessionService.updateSessionState(sessionId, state);
+            logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
+            return { reply, sessionState: state, agentHandoff: false };
+          }
         } else {
           reply = "Invalid PNR format. Please enter your PNR in the format BW1234 (e.g., BW9001).";
           await sessionService.updateSessionState(sessionId, state);
@@ -132,12 +191,14 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
           state.slots = {};
         } else {
           const b = statusResult.booking;
-          const formattedDep = new Date(b.departureTime).toLocaleString('en-IN', { 
-            timeZone: 'Asia/Kolkata', 
-            dateStyle: 'medium', 
-            timeStyle: 'short' 
+          // Remember the verified identity for the rest of the session (no re-auth for this PNR).
+          state.auth = { pnr: b.pnr, lastName: state.slots.lastName, verified: true };
+          const formattedDep = new Date(b.departureTime).toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            dateStyle: 'medium',
+            timeStyle: 'short'
           });
-          
+
           reply = `✈️ *Flight Status for PNR: ${b.pnr}*\n\n` +
                   `• *Passenger*: ${b.passengerName}\n` +
                   `• *Flight*: ${b.flightNumber} (${b.origin} ➔ ${b.destination})\n` +
@@ -158,11 +219,16 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
         const inputPnr = message.toUpperCase().replace(/\s+/g, '');
         if (/^BW\d{4}$/.test(inputPnr)) {
           state.slots.pnr = inputPnr;
-          reply = `I found PNR *${inputPnr}*. Please enter the passenger's last name to authorize the cancellation.`;
           state.step = 2;
-          await sessionService.updateSessionState(sessionId, state);
-          logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
-          return { reply, sessionState: state, agentHandoff: false };
+          if (isSessionVerifiedFor(state, inputPnr)) {
+            // Already verified for this PNR in this session — skip re-auth, fall through.
+            state.slots.lastName = state.auth.lastName;
+          } else {
+            reply = `I found PNR *${inputPnr}*. Please enter the passenger's last name to authorize the cancellation.`;
+            await sessionService.updateSessionState(sessionId, state);
+            logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
+            return { reply, sessionState: state, agentHandoff: false };
+          }
         } else {
           reply = "Invalid PNR format. Please enter your PNR in the format BW1234 (e.g., BW9001).";
           await sessionService.updateSessionState(sessionId, state);
@@ -197,6 +263,8 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
           state.slots = {};
         } else {
           const b = statusResult.booking;
+          // Remember the verified identity for the rest of the session (no re-auth for this PNR).
+          state.auth = { pnr: b.pnr, lastName: state.slots.lastName, verified: true };
           if (b.status === 'CANCELLED') {
             reply = `The booking for PNR *${b.pnr}* is already CANCELLED.`;
             state.currentFlow = null;
@@ -239,14 +307,14 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
           normalizedMsg.includes('complain')
         ) {
           await sessionService.setAgentHandoff(sessionId, true);
-          reply = "I see you have concerns about the cancellation policy or refund fees. I am transferring you to a customer service agent to assist you immediately...";
+          reply = "I see you have concerns about the cancellation policy or refund fees. I am transferring you to a customer service agent to assist you immediately..." + RETURN_TO_BOT_HINT;
           logger.logMessage('OUTBOUND', userId, reply);
           return { reply, sessionState: state, agentHandoff: true };
         }
 
         if (normalizedMsg === 'yes' || normalizedMsg === 'confirm') {
           const cancelResult = await bookingService.cancelBooking(state.slots.pnr!);
-          const refundAmount = 4500; // Simulated refund
+          const refundAmount = cancelResult.flight.price; // Simulated full refund of the fare
           reply = `❌ *Booking Cancelled Successfully*\n\n` +
                   `Your flight booking for PNR *${cancelResult.pnr}* has been cancelled.\n` +
                   `• *Refund Amount*: Rs. ${refundAmount} (processed to original payment method)\n` +
@@ -271,11 +339,16 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
         const inputPnr = message.toUpperCase().replace(/\s+/g, '');
         if (/^BW\d{4}$/.test(inputPnr)) {
           state.slots.pnr = inputPnr;
-          reply = `I found PNR *${inputPnr}*. Please enter the passenger's last name to authorize rescheduling.`;
           state.step = 2;
-          await sessionService.updateSessionState(sessionId, state);
-          logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
-          return { reply, sessionState: state, agentHandoff: false };
+          if (isSessionVerifiedFor(state, inputPnr)) {
+            // Already verified for this PNR in this session — skip re-auth, fall through.
+            state.slots.lastName = state.auth.lastName;
+          } else {
+            reply = `I found PNR *${inputPnr}*. Please enter the passenger's last name to authorize rescheduling.`;
+            await sessionService.updateSessionState(sessionId, state);
+            logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
+            return { reply, sessionState: state, agentHandoff: false };
+          }
         } else {
           reply = "Invalid PNR format. Please enter your PNR in the format BW1234 (e.g., BW9001).";
           await sessionService.updateSessionState(sessionId, state);
@@ -310,6 +383,8 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
           state.slots = {};
         } else {
           const b = statusResult.booking;
+          // Remember the verified identity for the rest of the session (no re-auth for this PNR).
+          state.auth = { pnr: b.pnr, lastName: state.slots.lastName, verified: true };
           if (b.status === 'CANCELLED') {
             reply = `Cannot reschedule a cancelled booking. PNR *${b.pnr}* is already cancelled.`;
             state.currentFlow = null;
@@ -343,7 +418,12 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
           const flights = await bookingService.searchFlights(state.slots.origin!, state.slots.destination!, inputDate);
           
           if (flights.length === 0) {
+            const range = await bookingService.routeDateRange(state.slots.origin!, state.slots.destination!);
+            const hint = range
+              ? `Flights on this route are currently available between *${ymdIST(range.first)}* and *${ymdIST(range.last)}*. `
+              : '';
             reply = `We couldn't find any alternative flights from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*.\n\n` +
+                    hint +
                     `Please enter another date (YYYY-MM-DD) or type 'reschedule' to start over.`;
           } else {
             // Keep up to 3 flights
@@ -417,6 +497,11 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
         const code = message.trim().toUpperCase();
         if (!airportRegex.test(code)) {
           reply = "Please enter a valid 3-letter departure airport code (e.g., BOM, DEL, BLR).";
+        } else if ((await bookingService.listDestinations(code)).length === 0) {
+          const origins = await bookingService.listOrigins();
+          reply = `Sorry, BlueWings doesn't operate from *${code}* right now. ✈️\n\n` +
+                  `We currently fly from: *${origins.join(', ')}*.\n` +
+                  `Please enter one of these 3-letter airport codes.`;
         } else {
           state.slots.origin = code;
           state.step = 2;
@@ -435,9 +520,17 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
         } else if (code === state.slots.origin) {
           reply = "Destination must be different from your departure city. Please enter a different 3-letter airport code.";
         } else {
-          state.slots.destination = code;
-          state.step = 3;
-          reply = `Great, *${state.slots.origin} ➔ ${code}*. What date would you like to fly? (Use format *YYYY-MM-DD*, e.g., 2026-07-05).`;
+          const destinations = await bookingService.listDestinations(state.slots.origin!);
+          if (!destinations.includes(code)) {
+            // Catch unserved routes here, instead of an endless "try another date" loop later.
+            reply = `Sorry, BlueWings doesn't fly *${state.slots.origin} ➔ ${code}* right now. ✈️\n\n` +
+                    `From *${state.slots.origin}* we currently serve: *${destinations.join(', ')}*.\n` +
+                    `Please choose one of these destinations.`;
+          } else {
+            state.slots.destination = code;
+            state.step = 3;
+            reply = `Great, *${state.slots.origin} ➔ ${code}*. What date would you like to fly? (Use format *YYYY-MM-DD*, e.g., 2026-07-05).`;
+          }
         }
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
@@ -456,8 +549,21 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
 
         const flights = await bookingService.searchFlights(state.slots.origin!, state.slots.destination!, inputDate);
         if (flights.length === 0) {
-          reply = `Sorry, no flights found from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*.\n\n` +
-                  `Please try another date (YYYY-MM-DD), or type 'agent' to speak with a representative.`;
+          const range = await bookingService.routeDateRange(state.slots.origin!, state.slots.destination!);
+          if (!range) {
+            // Route has no upcoming flights at all — asking for more dates is a
+            // dead end; send the user back to pick a served destination.
+            const destinations = await bookingService.listDestinations(state.slots.origin!);
+            reply = `Sorry, BlueWings has no upcoming flights from *${state.slots.origin} ➔ ${state.slots.destination}*. ✈️\n\n` +
+                    `From *${state.slots.origin}* we currently serve: *${destinations.join(', ')}*.\n` +
+                    `Please choose one of these destinations.`;
+            state.slots.destination = undefined;
+            state.step = 2;
+          } else {
+            reply = `Sorry, no flights found from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*.\n\n` +
+                    `Flights on this route are currently available between *${ymdIST(range.first)}* and *${ymdIST(range.last)}*. ` +
+                    `Please try another date (YYYY-MM-DD), or type 'agent' to speak with a representative.`;
+          }
         } else {
           const flightOptions = flights.slice(0, 3);
           state.slots.availableFlights = flightOptions.map(f => ({
@@ -555,6 +661,12 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
             email: state.slots.email!,
             phone
           });
+          // The user just created this booking — treat them as verified for the new PNR.
+          state.auth = {
+            pnr: booking.pnr,
+            lastName: state.slots.passengerName!.trim().split(/\s+/).pop(),
+            verified: true
+          };
           const depTime = new Date(booking.flight.departureTime).toLocaleString('en-IN', {
             timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
           });
@@ -576,9 +688,18 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
       // Not in an active flow, handle initial intent
       if (intent === 'CHECK_STATUS') {
         state.currentFlow = 'CHECK_STATUS';
-        
+
         if (parsed.slots.pnr) {
           state.slots.pnr = parsed.slots.pnr;
+        }
+
+        if (isSessionVerifiedFor(state, state.slots.pnr)) {
+          // Verified earlier this session — skip re-auth and re-enter the state
+          // machine so the answer comes back in this same turn.
+          state.slots.lastName = state.auth.lastName;
+          state.step = 2;
+          await sessionService.updateSessionState(sessionId, state);
+          return processCore(payload);
         }
 
         if (!state.slots.pnr) {
@@ -594,6 +715,14 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
         state.currentFlow = 'CANCEL';
         if (parsed.slots.pnr) {
           state.slots.pnr = parsed.slots.pnr;
+          if (isSessionVerifiedFor(state, state.slots.pnr)) {
+            // Verified earlier this session — skip re-auth and re-enter the state
+            // machine so the confirmation prompt comes back in this same turn.
+            state.slots.lastName = state.auth.lastName;
+            state.step = 2;
+            await sessionService.updateSessionState(sessionId, state);
+            return processCore(payload);
+          }
           reply = `I found PNR *${state.slots.pnr}* in your request. Please enter the passenger's last name to verify your identity for cancellation.`;
           state.step = 2;
         } else {
@@ -606,6 +735,14 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
         state.currentFlow = 'RESCHEDULE';
         if (parsed.slots.pnr) {
           state.slots.pnr = parsed.slots.pnr;
+          if (isSessionVerifiedFor(state, state.slots.pnr)) {
+            // Verified earlier this session — skip re-auth and re-enter the state
+            // machine so the date prompt comes back in this same turn.
+            state.slots.lastName = state.auth.lastName;
+            state.step = 2;
+            await sessionService.updateSessionState(sessionId, state);
+            return processCore(payload);
+          }
           reply = `I found PNR *${state.slots.pnr}* in your request. Please enter the passenger's last name to verify your identity for rescheduling.`;
           state.step = 2;
         } else {
@@ -621,13 +758,7 @@ export async function processIncomingMessage(payload: MessagePayload): Promise<M
       }
 
       else {
-        reply = "Hello! I am your BlueWings Airlines assistant. ✈️\n\n" +
-                  "How can I help you today? You can choose from:\n" +
-                  "1. *Check booking status* (type 'status')\n" +
-                  "2. *Book a new flight* (type 'book')\n" +
-                  "3. *Reschedule flight* (type 'reschedule')\n" +
-                  "4. *Cancel booking* (type 'cancel')\n" +
-                  "5. *Talk to an agent* (type 'agent')";
+        reply = "Hello! I am your BlueWings Airlines assistant. ✈️\n\n" + MENU_TEXT;
       }
     }
 

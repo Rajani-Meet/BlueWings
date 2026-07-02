@@ -1,5 +1,6 @@
 import '../styles/globals.css';
 import type { Metadata } from 'next';
+import SwRegister from '../components/SwRegister';
 
 export const metadata: Metadata = {
   title: 'BlueWings Airlines Chat',
@@ -20,7 +21,10 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
       </head>
-      <body>{children}</body>
+      <body>
+        <SwRegister />
+        {children}
+      </body>
     </html>
   );
 }

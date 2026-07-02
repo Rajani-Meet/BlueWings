@@ -50,7 +50,9 @@ export const sessionService = {
         });
       }
 
-      const state: SessionState = JSON.parse(session.stateJson);
+      // Merge over defaults so sessions persisted before a state-shape change
+      // (e.g. missing `auth`) still deserialize into a complete SessionState.
+      const state: SessionState = { ...DEFAULT_STATE, ...JSON.parse(session.stateJson) };
       return {
         id: session.id,
         channel: session.channel as 'PWA' | 'WHATSAPP',

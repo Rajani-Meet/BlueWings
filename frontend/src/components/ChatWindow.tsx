@@ -10,7 +10,10 @@ interface ChatItem {
   role: 'user' | 'bot' | 'system';
   text: string;
   time: string;
+  suggestions?: string[];
 }
+
+const MENU_SUGGESTIONS = ['Check status', 'Book a flight', 'Reschedule', 'Cancel booking', 'Talk to an agent'];
 
 const WELCOME_TEXT =
   'Hello! I am your BlueWings Airlines assistant. ✈️\n\n' +
@@ -39,8 +42,10 @@ function getUserId(): string {
 }
 
 export default function ChatWindow() {
+  // The welcome timestamp is set after mount: rendering nowTime() during SSR
+  // causes a hydration mismatch (server and browser format times differently).
   const [items, setItems] = useState<ChatItem[]>([
-    { id: 0, role: 'bot', text: WELCOME_TEXT, time: nowTime() },
+    { id: 0, role: 'bot', text: WELCOME_TEXT, time: '', suggestions: MENU_SUGGESTIONS },
   ]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -49,11 +54,15 @@ export default function ChatWindow() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    setItems(prev => prev.map(i => (i.id === 0 && !i.time ? { ...i, time: nowTime() } : i)));
+  }, []);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [items, busy]);
 
-  const submit = useCallback(async () => {
-    const text = input.trim();
+  const send = useCallback(async (raw: string) => {
+    const text = raw.trim();
     if (!text || busy) return;
     setInput('');
     setItems(prev => [...prev, { id: nextId.current++, role: 'user', text, time: nowTime() }]);
@@ -61,12 +70,21 @@ export default function ChatWindow() {
 
     try {
       const res = await sendMessage('PWA', getUserId(), text);
-      setItems(prev => [...prev, { id: nextId.current++, role: 'bot', text: res.reply, time: nowTime() }]);
+      setItems(prev => [
+        ...prev,
+        { id: nextId.current++, role: 'bot', text: res.reply, time: nowTime(), suggestions: res.suggestions },
+      ]);
       if (res.agentHandoff && !handoff) {
         setHandoff(true);
         setItems(prev => [
           ...prev,
           { id: nextId.current++, role: 'system', text: 'You have been placed in the agent queue 👩‍💼', time: nowTime() },
+        ]);
+      } else if (!res.agentHandoff && handoff) {
+        setHandoff(false);
+        setItems(prev => [
+          ...prev,
+          { id: nextId.current++, role: 'system', text: 'You are back with the automated assistant 🤖', time: nowTime() },
         ]);
       }
     } catch {
@@ -82,7 +100,9 @@ export default function ChatWindow() {
     } finally {
       setBusy(false);
     }
-  }, [input, busy, handoff]);
+  }, [busy, handoff]);
+
+  const submit = useCallback(() => send(input), [send, input]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -90,6 +110,12 @@ export default function ChatWindow() {
       void submit();
     }
   };
+
+  // Quick-reply chips from the latest bot message (hidden while a reply is pending).
+  const lastItem = items[items.length - 1];
+  const lastBot = [...items].reverse().find(i => i.role === 'bot');
+  const suggestions =
+    !busy && lastBot && lastItem.role !== 'user' ? lastBot.suggestions ?? [] : [];
 
   return (
     <div className="chat-shell">
@@ -111,6 +137,16 @@ export default function ChatWindow() {
         )}
         {busy && <TypingIndicator />}
       </div>
+
+      {suggestions.length > 0 && (
+        <div className="quick-replies">
+          {suggestions.map(s => (
+            <button key={s} className="quick-reply" onClick={() => void send(s)}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="chat-composer">
         <textarea

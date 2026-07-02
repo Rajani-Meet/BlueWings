@@ -67,6 +67,41 @@ export const bookingService = {
     };
   },
 
+  /** Distinct airports we currently depart from (for "we don't fly from X" replies). */
+  async listOrigins(): Promise<string[]> {
+    const rows = await prisma.flight.findMany({
+      distinct: ['origin'],
+      select: { origin: true },
+      orderBy: { origin: 'asc' }
+    });
+    return rows.map(r => r.origin);
+  },
+
+  /** Distinct destinations served from an origin (empty = origin not served). */
+  async listDestinations(origin: string): Promise<string[]> {
+    const rows = await prisma.flight.findMany({
+      where: { origin: origin.toUpperCase() },
+      distinct: ['destination'],
+      select: { destination: true },
+      orderBy: { destination: 'asc' }
+    });
+    return rows.map(r => r.destination);
+  },
+
+  /** First/last upcoming departure on a route, so "no flights on <date>" replies
+   *  can point the user at dates that actually have availability. */
+  async routeDateRange(origin: string, destination: string): Promise<{ first: Date; last: Date } | null> {
+    const where = {
+      origin: origin.toUpperCase(),
+      destination: destination.toUpperCase(),
+      departureTime: { gte: new Date() }
+    };
+    const first = await prisma.flight.findFirst({ where, orderBy: { departureTime: 'asc' } });
+    if (!first) return null;
+    const last = await prisma.flight.findFirst({ where, orderBy: { departureTime: 'desc' } });
+    return { first: first.departureTime, last: last!.departureTime };
+  },
+
   async searchFlights(origin: string, destination: string, dateStr: string) {
     logger.info(`Searching flights from ${origin} to ${destination} on date: ${dateStr}`);
     
