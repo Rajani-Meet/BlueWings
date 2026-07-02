@@ -99,6 +99,7 @@ describe('Flow 1: check booking status (with PNR + last name auth)', () => {
     expect(res.reply).toContain('TS901');
     expect(res.reply).toContain('CONFIRMED');
     expect(res.agentHandoff).toBe(false);
+    expect(res.ticketUrl).toBe('/api/ticket/BW9701?lastName=Alpha'); // re-download from status check
   });
 
   it('rejects a non-matching last name and resets the flow', async () => {
@@ -135,6 +136,9 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     expect(confirm.reply).toContain('Booking Confirmed');
     const pnrMatch = confirm.reply.match(/PNR\*?: (BW\d{4})/);
     expect(pnrMatch).not.toBeNull();
+
+    // The confirmation carries a pre-authorized e-ticket download link
+    expect(confirm.ticketUrl).toBe(`/api/ticket/${pnrMatch![1]}?lastName=Beta`);
 
     const booking = await prisma.booking.findUnique({
       where: { pnr: pnrMatch![1] },
@@ -289,6 +293,27 @@ describe('Session-persistent authentication (verify once per session)', () => {
     await say('auth-3', 'cancel');
     const res = await say('auth-3', 'BW9702');
     expect(res.reply).toContain('last name');
+  });
+});
+
+describe('E-ticket PDF generation', () => {
+  it('renders a valid PDF with the booking details', async () => {
+    const booking = await prisma.booking.findUnique({
+      where: { pnr: 'BW9701' },
+      include: { passenger: true, flight: true },
+    });
+    expect(booking).not.toBeNull();
+
+    const { buildTicketData, renderTicketPdf } = await import('../src/services/ticket.service');
+    const data = buildTicketData(booking!);
+    expect(data.pnr).toBe('BW9701');
+    expect(data.passengerName).toBe('Vitest Alpha');
+    expect(data.seat).toMatch(/^\d{1,2}[A-F]$/);
+    expect(data.gate).toContain('Gate');
+
+    const pdf = await renderTicketPdf(data);
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-'); // PDF magic bytes
+    expect(pdf.length).toBeGreaterThan(1500);
   });
 });
 

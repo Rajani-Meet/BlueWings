@@ -12,6 +12,14 @@ export interface MessageResult {
   agentHandoff: boolean;
   /** Quick-reply chips for channels that support them (PWA renders buttons; WhatsApp ignores). */
   suggestions?: string[];
+  /** Relative URL of the downloadable e-ticket PDF, set when a booking was just
+   *  confirmed, rescheduled, or looked up (PWA renders a download button). */
+  ticketUrl?: string;
+}
+
+/** Download link for the e-ticket endpoint, pre-authorized with the verified last name. */
+function buildTicketUrl(pnr: string, lastName: string): string {
+  return `/api/ticket/${pnr}?lastName=${encodeURIComponent(lastName)}`;
 }
 
 const MENU_TEXT =
@@ -103,6 +111,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
 
     let reply = '';
     let agentHandoff = false;
+    let ticketUrl: string | undefined;
 
     // 3. Parse intent and slots from the user message.
     // Mid-flow, inputs are slot values ("BOM", "Doe", "yes") consumed by the state
@@ -206,7 +215,10 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
                   `• *Booking Status*: ${b.status}\n` +
                   `• *Assigned Terminal/Gate*: ${b.gate}\n\n` +
                   `Is there anything else I can help you with?`;
-          
+
+          if (b.status !== 'CANCELLED') {
+            ticketUrl = buildTicketUrl(b.pnr, state.slots.lastName!);
+          }
           state.currentFlow = null;
           state.slots = {};
         }
@@ -481,8 +493,9 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
                   `• *New Flight*: ${chosenFlight.flightNumber} (${state.slots.origin} ➔ ${state.slots.destination})\n` +
                   `• *Departure*: ${depTime}\n` +
                   `• *Status*: RESCHEDULED\n\n` +
-                  `Is there anything else I can do for you?`;
-          
+                  `Your updated e-ticket is ready below. Is there anything else I can do for you?`;
+
+          ticketUrl = buildTicketUrl(updatedBooking.pnr, state.slots.lastName!);
           state.currentFlow = null;
           state.slots = {};
         }
@@ -677,7 +690,8 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
                   `• *Departure*: ${depTime}\n` +
                   `• *Amount Paid*: Rs. ${state.slots.price}\n` +
                   `• *Payment Ref*: ${payment.transactionId}\n\n` +
-                  `Keep your PNR *${booking.pnr}* handy to check status, reschedule, or cancel. Safe travels! ✈️`;
+                  `Your e-ticket is ready below. 🎫 Keep your PNR *${booking.pnr}* handy to check status, reschedule, or cancel. Safe travels! ✈️`;
+          ticketUrl = buildTicketUrl(booking.pnr, state.auth.lastName!);
           state.currentFlow = null;
           state.slots = {};
         }
@@ -766,7 +780,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
     await sessionService.updateSessionState(sessionId, state);
     logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr, state.slots.lastName);
 
-    return { reply, sessionState: state, agentHandoff };
+    return { reply, sessionState: state, agentHandoff, ticketUrl };
 
   } catch (error: any) {
     // The bot must never go silent: any unexpected failure gets a friendly reply.

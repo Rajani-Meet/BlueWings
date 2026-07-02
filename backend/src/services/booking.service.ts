@@ -19,6 +19,28 @@ export type CheckBookingStatusResult =
   | { matchError: true }
   | { matchError: false; booking: BookingStatusView };
 
+/** Case-insensitive last-name check against the passenger's full name. */
+export function lastNameMatches(passengerName: string, lastName: string): boolean {
+  const parts = passengerName.toLowerCase().split(/\s+/);
+  const provided = lastName.toLowerCase().trim();
+  return parts.includes(provided) || passengerName.toLowerCase().endsWith(provided);
+}
+
+/** Deterministic simulated gate, stable per PNR (mock flights carry no gate data). */
+export function assignGate(pnr: string): string {
+  const pnrSum = pnr.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const gates = ['Gate A12', 'Gate B4', 'Gate C18', 'Gate D9', 'Gate G24'];
+  return gates[pnrSum % gates.length];
+}
+
+/** Deterministic simulated seat, stable per PNR (mock bookings carry no seat data). */
+export function assignSeat(pnr: string): string {
+  const pnrSum = pnr.split('').reduce((sum, char) => sum + char.charCodeAt(0) * 7, 0);
+  const row = (pnrSum % 28) + 2; // rows 2-29
+  const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+  return `${row}${letters[pnrSum % letters.length]}`;
+}
+
 export const bookingService = {
   async checkBookingStatus(pnr: string, lastName: string): Promise<CheckBookingStatusResult> {
     logger.info(`Fetching booking details for PNR: ${pnr}, checking last name: ${lastName}`);
@@ -35,21 +57,11 @@ export const bookingService = {
       return null;
     }
 
-    // Simple last-name match (checks if the lowercase last name is a substring or suffix of the passenger name)
-    const passengerNameParts = booking.passenger.name.toLowerCase().split(/\s+/);
-    const providedLastName = lastName.toLowerCase().trim();
-    
-    const matchesLastName = passengerNameParts.includes(providedLastName) || 
-                            booking.passenger.name.toLowerCase().endsWith(providedLastName);
-
-    if (!matchesLastName) {
+    if (!lastNameMatches(booking.passenger.name, lastName)) {
       return { matchError: true };
     }
 
-    // Deterministic gate assignment based on PNR characters
-    const pnrSum = pnr.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
-    const gates = ['Gate A12', 'Gate B4', 'Gate C18', 'Gate D9', 'Gate G24'];
-    const assignedGate = gates[pnrSum % gates.length];
+    const assignedGate = assignGate(pnr);
 
     return {
       matchError: false,

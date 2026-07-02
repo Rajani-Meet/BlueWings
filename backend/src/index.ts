@@ -3,6 +3,7 @@ import cors from 'cors';
 import { env } from './config/env';
 import messageRouter from './routes/message.route';
 import whatsappRouter from './routes/whatsapp.route';
+import ticketRouter from './routes/ticket.route';
 import { logger } from './utils/logger';
 
 const app = express();
@@ -13,6 +14,7 @@ app.use(express.json());
 // Routes
 app.use('/api/message', messageRouter);
 app.use('/api/webhook/whatsapp', whatsappRouter);
+app.use('/api/ticket', ticketRouter);
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'BlueWings Conversational Booking API' });
