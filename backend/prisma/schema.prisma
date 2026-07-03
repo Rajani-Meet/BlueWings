@@ -38,6 +38,8 @@ model Booking {
   flightId    String
   passenger   Passenger     @relation(fields: [passengerId], references: [id])
   passengerId String
+  seatNumber  String?       // Selected seat, e.g., "3A"
+  pricePaid   Float?        // Total price paid (flight price + seat price adjustment)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 }

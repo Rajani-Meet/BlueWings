@@ -41,11 +41,26 @@ let flightA: { id: string; flightNumber: string };
 let flightB: { id: string; flightNumber: string };
 
 async function cleanupFixtures() {
-  await prisma.booking.deleteMany({ where: { pnr: { startsWith: 'BW97' } } });
+  await prisma.booking.deleteMany({
+    where: {
+      OR: [
+        { pnr: { startsWith: 'BW97' } },
+        { flight: { flightNumber: { startsWith: 'TS9' } } }
+      ]
+    }
+  });
   await prisma.conversationSession.deleteMany({
     where: { channelUserId: { startsWith: TEST_USER_PREFIX } },
   });
-  await prisma.passenger.deleteMany({ where: { phone: TEST_PHONE } });
+  await prisma.passenger.deleteMany({
+    where: {
+      OR: [
+        { phone: TEST_PHONE },
+        { email: { startsWith: 'vitest' } },
+        { email: { startsWith: 'retry' } }
+      ]
+    }
+  });
   await prisma.flight.deleteMany({ where: { flightNumber: { startsWith: 'TS9' } } });
 }
 
@@ -133,9 +148,19 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     await say('book-1', 'TS901');
     await say('book-1', 'Vitest Beta');
     await say('book-1', 'vitest.beta@example.com');
-    const confirm = await say('book-1', '+911000009998');
+    
+    // Step 7: Enter phone
+    const seatPrompt = await say('book-1', '+911000009998');
+    expect(seatPrompt.reply).toContain('select your seat');
+    expect(seatPrompt.reply).toContain('3A');
+    expect(seatPrompt.suggestions).toContain('1A');
+
+    // Step 8: Select seat '3A' (Standard Window, +Rs. 300)
+    const confirm = await say('book-1', '3A');
 
     expect(confirm.reply).toContain('Booking Confirmed');
+    expect(confirm.reply).toContain('Seat*: 3A');
+    expect(confirm.reply).toContain('Amount Paid*: Rs. 5300'); // 5000 base + 300 window
     const pnrMatch = confirm.reply.match(/PNR\*?: (BW\d{4})/);
     expect(pnrMatch).not.toBeNull();
 
@@ -150,6 +175,8 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     expect(booking!.status).toBe('CONFIRMED');
     expect(booking!.flight.flightNumber).toBe('TS901');
     expect(booking!.passenger.name).toBe('Vitest Beta');
+    expect(booking!.seatNumber).toBe('3A');
+    expect(booking!.pricePaid).toBe(5300);
 
     // cleanup the extra passenger created by this flow
     await prisma.booking.delete({ where: { id: booking!.id } });
@@ -218,12 +245,21 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     await say('book-9', 'Retry Passenger');
     await say('book-9', 'retry.passenger@example.com');
 
-    const declined = await say('book-9', '+911234560000');
+    // Step 7: Enter phone ending in 0000
+    const seatPrompt = await say('book-9', '+911234560000');
+    expect(seatPrompt.reply).toContain('select your seat');
+
+    // Step 8: Select seat '3A' -> triggers payment and fails
+    const declined = await say('book-9', '3A');
     expect(declined.reply).toContain('Payment Declined');
     expect(declined.sessionState.currentFlow).toBe('BOOK'); // details preserved
+    expect(declined.sessionState.slots.seatNumber).toBe('3A');
 
+    // Retry with a successful phone number
     const confirmed = await say('book-9', '+911234567891');
     expect(confirmed.reply).toContain('Booking Confirmed');
+    expect(confirmed.reply).toContain('Seat*: 3A');
+    expect(confirmed.reply).toContain('Amount Paid*: Rs. 5300');
 
     // cleanup the booking + passenger this test created
     const pnr = confirmed.reply.match(/PNR\*?: (BW\d{4})/)![1];

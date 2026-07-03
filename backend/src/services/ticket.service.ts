@@ -35,8 +35,8 @@ export function buildTicketData(booking: BookingWithRelations): TicketData {
     departureTime: booking.flight.departureTime,
     arrivalTime: booking.flight.arrivalTime,
     gate: assignGate(booking.pnr),
-    seat: assignSeat(booking.pnr),
-    fare: booking.flight.price,
+    seat: booking.seatNumber || assignSeat(booking.pnr),
+    fare: booking.pricePaid || booking.flight.price,
     bookedAt: booking.createdAt
   };
 }

@@ -5,6 +5,7 @@ import { sessionService, SessionState } from '../services/session.service';
 import { parseIntent, keywordParseIntent } from '../services/intentRouter.service';
 import { bookingService } from '../services/booking.service';
 import { paymentService } from '../services/payment.service';
+import prisma from '../db/prismaClient';
 
 export interface MessageResult {
   reply: string;
@@ -40,6 +41,54 @@ const RESUME_BOT_REGEX = /\bmenu\b|\bresume\b|\bmain menu\b|\bstart over\b|back 
 /** YYYY-MM-DD in IST, for pointing users at dates that have flights. */
 function ymdIST(date: Date): string {
   return new Date(date).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function generateSeatMap(occupiedSeats: Set<string>) {
+  const rows = [1, 2, 3, 4, 5];
+  const cols = ['A', 'B', 'C', 'D', 'E', 'F'];
+  const availableSeats: string[] = [];
+  
+  let mapLines: string[] = [];
+  
+  mapLines.push('💺 *SEAT MAP*');
+  mapLines.push('`[ ]` = Available | `[X]` = Occupied\n');
+  
+  mapLines.push('👑 *Premium (+Rs. 800)*');
+  for (let r of [1, 2]) {
+    let rowParts: string[] = [];
+    for (let c of cols) {
+      const seat = `${r}${c}`;
+      if (occupiedSeats.has(seat)) {
+        rowParts.push('`[X]`');
+      } else {
+        rowParts.push(`\`[${seat}]\``);
+        availableSeats.push(seat);
+      }
+      if (c === 'C') rowParts.push('  '); // aisle gap
+    }
+    mapLines.push(`Row ${r}: ${rowParts.join(' ')}`);
+  }
+  
+  mapLines.push('\n✈️ *Standard (Window +Rs. 300 / Aisle +Rs. 200 / Middle +Rs. 0)*');
+  for (let r of [3, 4, 5]) {
+    let rowParts: string[] = [];
+    for (let c of cols) {
+      const seat = `${r}${c}`;
+      if (occupiedSeats.has(seat)) {
+        rowParts.push('`[X]`');
+      } else {
+        rowParts.push(`\`[${seat}]\``);
+        availableSeats.push(seat);
+      }
+      if (c === 'C') rowParts.push('  '); // aisle gap
+    }
+    mapLines.push(`Row ${r}: ${rowParts.join(' ')}`);
+  }
+  
+  return {
+    seatMapText: mapLines.join('\n'),
+    availableSeats
+  };
 }
 
 /** True when this session already verified PNR + last name for exactly this PNR. */
@@ -151,6 +200,10 @@ function buildSuggestions(result: MessageResult): string[] {
   const state = result.sessionState;
   if (state.currentFlow === null) return MENU_SUGGESTIONS;
   if (state.currentFlow === 'CANCEL' && state.step === 3) return ['Yes', 'No'];
+  if (state.currentFlow === 'BOOK' && state.step === 8) {
+    const seats: string[] = state.slots.availableSeatList || [];
+    return seats.slice(0, 5);
+  }
   return [];
 }
 
@@ -719,7 +772,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
         return { reply, sessionState: state, agentHandoff: false };
       }
 
-      // 7. Collect phone, simulate payment, create booking
+      // 7. Collect phone and transition to seat selection
       if (state.step === 7) {
         const phone = message.trim().replace(/\s+/g, '');
         if (!/^\+?\d{7,15}$/.test(phone)) {
@@ -729,40 +782,132 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
           return { reply, sessionState: state, agentHandoff: false };
         }
 
-        // Simulated payment. Demo/test hook: phone numbers ending in 0000 are
-        // deterministically declined so the unhappy path can be shown live.
-        const payment = await paymentService.processPayment(state.slots.price || 0, {
+        state.slots.phone = phone;
+        state.step = 8;
+
+        // Fetch occupied seats for this flight
+        const occupiedBookings = await prisma.booking.findMany({
+          where: {
+            flightId: state.slots.selectedFlightId,
+            status: { not: 'CANCELLED' },
+            seatNumber: { not: null }
+          },
+          select: { seatNumber: true }
+        });
+        const occupiedSeats = new Set(occupiedBookings.map(b => b.seatNumber as string));
+
+        // Generate seat map and available seats list
+        const { seatMapText, availableSeats } = generateSeatMap(occupiedSeats);
+        state.slots.availableSeatList = availableSeats; // save for suggestions and validation
+
+        reply = `Thanks! Now, let's select your seat. Here is the seat map for Flight *${state.slots.selectedFlightNumber}*:\n\n` +
+                `${seatMapText}\n\n` +
+                `*Available Seats*:\n` +
+                `${availableSeats.join(', ')}\n\n` +
+                `Reply with the seat number you'd like to book (e.g., *3A*).`;
+
+        await sessionService.updateSessionState(sessionId, state);
+        logger.logMessage('OUTBOUND', userId, reply);
+        return { reply, sessionState: state, agentHandoff: false };
+      }
+
+      // 8. Seat Selection and Payment
+      if (state.step === 8) {
+        const input = message.trim().toUpperCase();
+
+        // Check if we are in a payment retry path (input is a phone number, and a seat is already selected)
+        const isPhoneRetry = /^\+?\d{7,15}$/.test(input.replace(/\s+/g, '')) && state.slots.seatNumber;
+        
+        let seat = state.slots.seatNumber;
+        let phone = state.slots.phone;
+
+        if (isPhoneRetry) {
+          phone = input.replace(/\s+/g, '');
+          state.slots.phone = phone;
+        } else {
+          // Validate seat selection
+          const available: string[] = state.slots.availableSeatList || [];
+          if (!available.includes(input)) {
+            reply = `Invalid or occupied seat. Please reply with one of the available seats listed:\n\n${available.join(', ')}`;
+            await sessionService.updateSessionState(sessionId, state);
+            logger.logMessage('OUTBOUND', userId, reply);
+            return { reply, sessionState: state, agentHandoff: false };
+          }
+          seat = input;
+          state.slots.seatNumber = seat;
+        }
+
+        // Calculate price adjustment based on seat category
+        // Premium (Rows 1-2): +Rs. 800
+        // Window (Row 3-5, A/F): +Rs. 300
+        // Aisle (Row 3-5, C/D): +Rs. 200
+        // Middle (Row 3-5, B/E): +Rs. 0
+        const row = parseInt(seat.charAt(0), 10);
+        const col = seat.charAt(1);
+        let adjustment = 0;
+        let category = 'Standard Middle';
+
+        if (row <= 2) {
+          adjustment = 800;
+          category = 'Premium';
+        } else {
+          if (col === 'A' || col === 'F') {
+            adjustment = 300;
+            category = 'Standard Window';
+          } else if (col === 'C' || col === 'D') {
+            adjustment = 200;
+            category = 'Standard Aisle';
+          } else {
+            adjustment = 0;
+            category = 'Standard Middle';
+          }
+        }
+
+        const basePrice = state.slots.price || 0;
+        const totalPrice = basePrice + adjustment;
+        state.slots.totalPrice = totalPrice;
+
+        // Process simulated payment
+        const payment = await paymentService.processPayment(totalPrice, {
           simulateFailure: phone.endsWith('0000')
         });
+
         if (!payment.success) {
-          // Keep the flow (and everything already collected) alive for a retry —
-          // the user only needs to supply a different phone/payment number.
           reply = `❌ *Payment Declined*\n\n${payment.failureReason || 'The payment could not be processed.'}\n\n` +
-                  `No money was taken and your details are saved. Please enter a different phone number to retry, ` +
+                  `No money was taken. We have saved your seat selection *${seat}*. Please enter a different phone number to retry payment, ` +
                   `or type 'agent' for assistance.`;
         } else {
-          const booking = await bookingService.createBooking(state.slots.selectedFlightId!, {
-            name: state.slots.passengerName!,
-            email: state.slots.email!,
-            phone
-          });
-          // The user just created this booking — treat them as verified for the new PNR.
+          const booking = await bookingService.createBooking(
+            state.slots.selectedFlightId!,
+            {
+              name: state.slots.passengerName!,
+              email: state.slots.email!,
+              phone
+            },
+            seat,
+            totalPrice
+          );
+
           state.auth = {
             pnr: booking.pnr,
             lastName: state.slots.passengerName!.trim().split(/\s+/).pop(),
             verified: true
           };
+
           const depTime = new Date(booking.flight.departureTime).toLocaleString('en-IN', {
             timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
           });
+
           reply = `✅ *Booking Confirmed!*\n\n` +
                   `• *PNR*: ${booking.pnr}\n` +
                   `• *Passenger*: ${booking.passenger.name}\n` +
                   `• *Flight*: ${booking.flight.flightNumber} (${booking.flight.origin} ➔ ${booking.flight.destination})\n` +
                   `• *Departure*: ${depTime}\n` +
-                  `• *Amount Paid*: Rs. ${state.slots.price}\n` +
+                  `• *Seat*: ${seat} (${category})\n` +
+                  `• *Amount Paid*: Rs. ${totalPrice} (Base: Rs. ${basePrice} + Seat: Rs. ${adjustment})\n` +
                   `• *Payment Ref*: ${payment.transactionId}\n\n` +
                   `Your e-ticket is ready below. 🎫 Keep your PNR *${booking.pnr}* handy to check status, reschedule, or cancel. Safe travels! ✈️`;
+          
           ticketUrl = buildTicketUrl(booking.pnr, state.auth.lastName!);
           state.currentFlow = null;
           state.slots = {};

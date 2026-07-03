@@ -13,6 +13,8 @@ export interface BookingStatusView {
   arrivalTime: Date;
   status: BookingStatus;
   gate: string;
+  seat: string;
+  pricePaid: number;
 }
 export type CheckBookingStatusResult =
   | null
@@ -74,7 +76,9 @@ export const bookingService = {
         departureTime: booking.flight.departureTime,
         arrivalTime: booking.flight.arrivalTime,
         status: booking.status,
-        gate: assignedGate
+        gate: assignedGate,
+        seat: booking.seatNumber || assignSeat(pnr),
+        pricePaid: booking.pricePaid || booking.flight.price
       }
     };
   },
@@ -144,7 +148,12 @@ export const bookingService = {
     });
   },
 
-  async createBooking(flightId: string, passengerDetails: { name: string; email: string; phone: string }) {
+  async createBooking(
+    flightId: string,
+    passengerDetails: { name: string; email: string; phone: string },
+    seatNumber?: string,
+    pricePaid?: number
+  ) {
     logger.info(`Creating new booking for flight ID: ${flightId} in database transaction`);
     
     return prisma.$transaction(async (tx) => {
@@ -190,7 +199,9 @@ export const bookingService = {
           pnr,
           flightId: flight.id,
           passengerId: passenger.id,
-          status: 'CONFIRMED'
+          status: 'CONFIRMED',
+          seatNumber,
+          pricePaid
         },
         include: {
           passenger: true,
