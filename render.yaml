@@ -1,0 +1,34 @@
+# Render Blueprint — deploys the backend API + managed Postgres.
+# Usage: push the repo to GitHub → Render dashboard → New → Blueprint → pick repo.
+# The frontend deploys to Vercel separately (see docs/deployment.md).
+
+services:
+  - type: web
+    name: bluewings-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm ci && npx prisma generate && npm run build && npx tsc prisma/seed.ts --outDir seed-dist --module commonjs --target es2022 --esModuleInterop --skipLibCheck
+    startCommand: npx prisma migrate deploy && if [ "$SEED_ON_START" = "true" ]; then node seed-dist/seed.js || true; fi && node dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bluewings-db
+          property: connectionString
+      - key: SEED_ON_START
+        value: "true"
+      - key: OPENROUTER_API_KEY
+        sync: false # set in the Render dashboard
+      - key: OPENROUTER_MODEL
+        value: "openai/gpt-oss-120b:free,nvidia/nemotron-3-super-120b-a12b:free,openai/gpt-oss-20b:free"
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        value: bluewings_verify_token_12345
+
+databases:
+  - name: bluewings-db
+    plan: free
