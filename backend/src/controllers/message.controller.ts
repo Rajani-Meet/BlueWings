@@ -1102,6 +1102,11 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
     }
 
     // 6. Save updated session state and return response
+    if (channel === 'WHATSAPP' && ticketUrl) {
+      const baseUrl = process.env.BACKEND_URL || 'https://bluewings-backend.onrender.com';
+      reply += `\n\n📄 Download your PDF ticket: ${baseUrl}${ticketUrl}`;
+    }
+
     await sessionService.updateSessionState(sessionId, state);
     logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr, state.slots.lastName);
 
