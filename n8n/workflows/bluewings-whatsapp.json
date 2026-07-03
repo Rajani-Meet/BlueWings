@@ -48,7 +48,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Translate Meta's webhook envelope into {from, text} items.\n// Status/delivery events (no `messages`) produce no items.\nconst out = [];\nfor (const item of $input.all()) {\n  const body = item.json.body ?? item.json;\n  for (const entry of body?.entry ?? []) {\n    for (const change of entry?.changes ?? []) {\n      for (const msg of change?.value?.messages ?? []) {\n        if (!msg?.from) continue;\n        const text = msg.type === 'text' && msg.text?.body ? msg.text.body : '';\n        out.push({ json: { from: msg.from, text } });\n      }\n    }\n  }\n}\nreturn out;"
+        "jsCode": "// Translate Meta's webhook envelope into {from, text} items.\n// Interactive button/list taps feed their title back as if typed.\n// Status/delivery events (no `messages`) produce no items.\nconst out = [];\nfor (const item of $input.all()) {\n  const body = item.json.body ?? item.json;\n  for (const entry of body?.entry ?? []) {\n    for (const change of entry?.changes ?? []) {\n      for (const msg of change?.value?.messages ?? []) {\n        if (!msg?.from) continue;\n        let text = '';\n        if (msg.type === 'text' && msg.text?.body) text = msg.text.body;\n        else if (msg.type === 'interactive') text = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '';\n        out.push({ json: { from: msg.from, text } });\n      }\n    }\n  }\n}\nreturn out;"
       },
       "id": "a1b2c3d4-0006-4000-8000-000000000006",
       "name": "Extract Messages",
@@ -75,6 +75,17 @@
     },
     {
       "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build the Graph API payload: suggestions become native interactive buttons\n// (<=3) or a list message (4-10); long bodies or no chips fall back to text.\nconst reply = $json.reply ?? 'Sorry, something went wrong. Please try again.';\nconst to = $('Extract Messages').item.json.from;\nconst chips = ($json.suggestions ?? []).filter(s => s && s.length <= 20).slice(0, 10);\nconst base = { messaging_product: 'whatsapp', recipient_type: 'individual', to };\nlet payload;\nif (chips.length === 0 || reply.length > 1024) {\n  payload = { ...base, type: 'text', text: { body: reply } };\n} else if (chips.length <= 3) {\n  payload = { ...base, type: 'interactive', interactive: { type: 'button', body: { text: reply }, action: { buttons: chips.map((title, i) => ({ type: 'reply', reply: { id: 'chip_' + i, title } })) } } };\n} else {\n  payload = { ...base, type: 'interactive', interactive: { type: 'list', body: { text: reply }, action: { button: 'Choose an option', sections: [{ title: 'BlueWings', rows: chips.map((title, i) => ({ id: 'chip_' + i, title })) }] } } };\n}\nreturn { json: payload };"
+      },
+      "id": "a1b2c3d4-0009-4000-8000-000000000009",
+      "name": "Build Reply Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "=https://graph.facebook.com/v20.0/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
         "sendHeaders": true,
@@ -88,7 +99,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: $('Extract Messages').item.json.from, type: 'text', text: { body: $json.reply } }) }}",
+        "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {
           "timeout": 15000
         }
@@ -97,7 +108,7 @@
       "name": "Send WhatsApp Reply",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [660, 300]
+      "position": [880, 300]
     }
   ],
   "connections": {
@@ -111,6 +122,9 @@
       "main": [[{ "node": "Call BlueWings Backend", "type": "main", "index": 0 }]]
     },
     "Call BlueWings Backend": {
+      "main": [[{ "node": "Build Reply Payload", "type": "main", "index": 0 }]]
+    },
+    "Build Reply Payload": {
       "main": [[{ "node": "Send WhatsApp Reply", "type": "main", "index": 0 }]]
     }
   }

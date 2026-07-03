@@ -38,6 +38,10 @@ function extractInboundMessages(body: any): InboundWhatsAppMessage[] {
         if (!msg?.from) continue;
         if (msg.type === 'text' && msg.text?.body) {
           out.push({ from: msg.from, text: msg.text.body });
+        } else if (msg.type === 'interactive') {
+          // Button/list taps carry their title — feed it back as if typed.
+          const title = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title;
+          out.push({ from: msg.from, text: title || '' });
         } else {
           out.push({ from: msg.from, text: '' }); // unsupported type (image, audio, ...)
         }
@@ -45,6 +49,52 @@ function extractInboundMessages(body: any): InboundWhatsAppMessage[] {
     }
   }
   return out;
+}
+
+// Meta limits: button titles 20 chars (max 3 buttons), list row titles 24 chars
+// (max 10 rows), interactive body 1024 chars.
+const WA_BUTTON_TITLE_MAX = 20;
+const WA_INTERACTIVE_BODY_MAX = 1024;
+
+/**
+ * Build the Graph API message payload. Suggestions become native interactive
+ * buttons (≤3) or a list message (4-10); anything unsupported falls back to
+ * plain text so the reply always goes through.
+ */
+export function buildWhatsAppMessagePayload(toPhone: string, text: string, suggestions?: string[]): object {
+  const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to: toPhone };
+  const chips = (suggestions ?? []).filter(s => s.length > 0 && s.length <= WA_BUTTON_TITLE_MAX).slice(0, 10);
+
+  if (chips.length === 0 || text.length > WA_INTERACTIVE_BODY_MAX) {
+    return { ...base, type: 'text', text: { body: text } };
+  }
+
+  if (chips.length <= 3) {
+    return {
+      ...base,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text },
+        action: {
+          buttons: chips.map((title, i) => ({ type: 'reply', reply: { id: `chip_${i}`, title } }))
+        }
+      }
+    };
+  }
+
+  return {
+    ...base,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text },
+      action: {
+        button: 'Choose an option',
+        sections: [{ title: 'BlueWings', rows: chips.map((title, i) => ({ id: `chip_${i}`, title })) }]
+      }
+    }
+  };
 }
 
 /**
@@ -70,7 +120,7 @@ export async function handleWhatsAppWebhook(req: Request, res: Response) {
         userId: msg.from,
         message: msg.text
       });
-      await sendWhatsAppMessage(msg.from, result.reply);
+      await sendWhatsAppMessage(msg.from, result.reply, result.suggestions);
     }
   } catch (error: any) {
     // Already acked; just log. processIncomingMessage itself never throws.
@@ -82,7 +132,7 @@ export async function handleWhatsAppWebhook(req: Request, res: Response) {
  * Send a text message via the WhatsApp Cloud API. When credentials are absent
  * (local dev), logs the outbound message instead so flows remain testable.
  */
-export async function sendWhatsAppMessage(toPhone: string, text: string): Promise<boolean> {
+export async function sendWhatsAppMessage(toPhone: string, text: string, suggestions?: string[]): Promise<boolean> {
   if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
     logger.info(`[WA SIMULATED -> ${toPhone}] ${text}`);
     return false;
@@ -95,13 +145,7 @@ export async function sendWhatsAppMessage(toPhone: string, text: string): Promis
         Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: toPhone,
-        type: 'text',
-        text: { body: text }
-      })
+      body: JSON.stringify(buildWhatsAppMessagePayload(toPhone, text, suggestions))
     });
 
     if (!res.ok) {
