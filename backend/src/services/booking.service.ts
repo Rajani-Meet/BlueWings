@@ -273,5 +273,53 @@ export const bookingService = {
 
       return updated;
     });
+  },
+
+  /**
+   * All bookings belonging to the passenger who owns this PNR, newest journey
+   * first. Powers the "my trips" view once the session is verified.
+   */
+  async listTripsForPnr(pnr: string) {
+    const booking = await prisma.booking.findUnique({
+      where: { pnr: pnr.toUpperCase() },
+      select: { passengerId: true }
+    });
+    if (!booking) return null;
+    return prisma.booking.findMany({
+      where: { passengerId: booking.passengerId },
+      include: { flight: true },
+      orderBy: { flight: { departureTime: 'desc' } }
+    });
+  },
+
+  /**
+   * Ops simulation: delay the flight behind a PNR by N minutes and return the
+   * affected active bookings so callers can notify those passengers proactively.
+   */
+  async delayFlightByPnr(pnr: string, minutes: number) {
+    return prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({
+        where: { pnr: pnr.toUpperCase() },
+        include: { flight: true }
+      });
+      if (!booking) {
+        throw new Error('Booking not found');
+      }
+
+      const flight = await tx.flight.update({
+        where: { id: booking.flightId },
+        data: {
+          departureTime: new Date(booking.flight.departureTime.getTime() + minutes * 60_000),
+          arrivalTime: new Date(booking.flight.arrivalTime.getTime() + minutes * 60_000)
+        }
+      });
+
+      const affected = await tx.booking.findMany({
+        where: { flightId: flight.id, status: { not: 'CANCELLED' } },
+        include: { passenger: true }
+      });
+
+      return { flight, affected };
+    });
   }
 };

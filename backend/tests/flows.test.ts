@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import prisma from '../src/db/prismaClient';
 import { processIncomingMessage } from '../src/controllers/message.controller';
+import { bookingService } from '../src/services/booking.service';
+import { sessionService } from '../src/services/session.service';
 
 /**
  * Integration tests for the 4 locked flows + agent handoff, driven through the
@@ -189,6 +191,46 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     const step3 = await say('book-5', 'testcityb');
     expect(step3.reply).toContain('TQA ➔ TQB');
   });
+
+  it('one-message booking: route + date in a single message jumps to options', async () => {
+    const res = await say('book-6', `book testcitya to testcityb on ${ymd(daysFromNow(1, 0))}`);
+    expect(res.reply).toContain('TS901');
+    expect(res.sessionState.step).toBe(4);
+    expect(res.sessionState.slots.origin).toBe('TQA');
+    expect(res.sessionState.slots.destination).toBe('TQB');
+  });
+
+  it('one-message booking: route without date jumps to the date prompt', async () => {
+    const res = await say('book-7', 'book a flight from testcitya to testcityb');
+    expect(res.reply).toContain('What date');
+    expect(res.sessionState.step).toBe(3);
+  });
+
+  it('one-message booking: invalid extracted slots fall back to step-by-step', async () => {
+    const res = await say('book-8', 'i want to book a trip');
+    expect(res.reply).toContain('Which city are you flying *from*');
+    expect(res.sessionState.step).toBe(1);
+  });
+
+  it('declined payment (phone ending 0000) keeps the flow alive for retry', async () => {
+    await say('book-9', `book testcitya to testcityb on ${ymd(daysFromNow(1, 0))}`);
+    await say('book-9', 'TS901');
+    await say('book-9', 'Retry Passenger');
+    await say('book-9', 'retry.passenger@example.com');
+
+    const declined = await say('book-9', '+911234560000');
+    expect(declined.reply).toContain('Payment Declined');
+    expect(declined.sessionState.currentFlow).toBe('BOOK'); // details preserved
+
+    const confirmed = await say('book-9', '+911234567891');
+    expect(confirmed.reply).toContain('Booking Confirmed');
+
+    // cleanup the booking + passenger this test created
+    const pnr = confirmed.reply.match(/PNR\*?: (BW\d{4})/)![1];
+    const booking = await prisma.booking.findUnique({ where: { pnr } });
+    await prisma.booking.delete({ where: { id: booking!.id } });
+    await prisma.passenger.delete({ where: { id: booking!.passengerId } });
+  });
 });
 
 
@@ -268,6 +310,100 @@ describe('Agent handoff triggers', () => {
     const followup = await say('handoff-2', 'status');
     expect(followup.agentHandoff).toBe(false);
     expect(followup.reply).toContain('PNR');
+  });
+});
+
+describe('My trips (list all bookings)', () => {
+  it('verifies once and lists every booking of the passenger', async () => {
+    await say('trips-1', 'show my bookings');
+    await say('trips-1', 'BW9701');
+    const res = await say('trips-1', 'Alpha');
+
+    expect(res.reply).toContain('Your Trips');
+    expect(res.reply).toContain('BW9701');
+    expect(res.reply).toContain('BW9702');
+    expect(res.reply).toContain('BW9703');
+  });
+
+  it('answers immediately when the session is already verified', async () => {
+    await say('trips-2', 'status');
+    await say('trips-2', 'BW9701');
+    await say('trips-2', 'Alpha');
+
+    const res = await say('trips-2', 'my trips');
+    expect(res.reply).toContain('Your Trips');
+    expect(res.sessionState.currentFlow).toBeNull(); // no re-auth round trip
+  });
+
+  it("does not hijack action phrases like 'cancel my booking'", async () => {
+    const res = await say('trips-3', 'cancel my booking');
+    expect(res.sessionState.currentFlow).toBe('CANCEL');
+  });
+});
+
+describe('Hinglish input (keyword fallback)', () => {
+  it("'ticket radd karo' starts the cancel flow", async () => {
+    const res = await say('hindi-1', 'meri ticket radd karo BW9701');
+    expect(res.sessionState.currentFlow).toBe('CANCEL');
+    expect(res.sessionState.slots.pnr).toBe('BW9701');
+  });
+
+  it("'flight badalni hai' starts the reschedule flow", async () => {
+    const res = await say('hindi-2', 'mujhe apni flight badalni hai');
+    expect(res.sessionState.currentFlow).toBe('RESCHEDULE');
+  });
+
+  it("'meri flight kab hai' starts the status flow", async () => {
+    const res = await say('hindi-3', 'meri flight kab hai');
+    expect(res.sessionState.currentFlow).toBe('CHECK_STATUS');
+  });
+});
+
+describe('Proactive delay notification', () => {
+  it('delays the flight and surfaces a notice on the next chat turn', async () => {
+    // Verify a session against BW9701 so the notice can find it.
+    await say('delay-1', 'status');
+    await say('delay-1', 'BW9701');
+    await say('delay-1', 'Alpha');
+
+    const before = await prisma.flight.findUnique({ where: { id: flightA.id } });
+    const { flight, affected } = await bookingService.delayFlightByPnr('BW9701', 60);
+    expect(flight.departureTime.getTime()).toBe(before!.departureTime.getTime() + 60 * 60_000);
+    expect(affected.map(b => b.pnr)).toContain('BW9701');
+
+    const notified = await sessionService.addPendingNoticeByPnr('BW9701', '⚠️ *Flight Update* — test delay notice');
+    expect(notified).toBeGreaterThan(0);
+
+    // The next message — any message — carries the notice on top.
+    const res = await say('delay-1', 'thanks');
+    expect(res.reply).toContain('Flight Update');
+    expect(res.reply).toContain('test delay notice');
+
+    // Delivered exactly once: the following turn is clean.
+    const after = await say('delay-1', 'hello');
+    expect(after.reply).not.toContain('Flight Update');
+  });
+});
+
+describe('Greeting/help pre-check (MENU intent)', () => {
+  it("shows the menu for 'help' instead of joining the agent queue", async () => {
+    const res = await say('greet-1', 'help');
+    expect(res.agentHandoff).toBe(false);
+    expect(res.reply).toContain('How can I help you today');
+  });
+
+  it('never counts greetings as failed parses (no handoff on repeats)', async () => {
+    await say('greet-2', 'hi');
+    await say('greet-2', 'help');
+    const third = await say('greet-2', 'hello');
+    expect(third.agentHandoff).toBe(false);
+    expect(third.reply).toContain('How can I help you today');
+  });
+
+  it("still routes messages with a concrete ask normally ('help me cancel...')", async () => {
+    const res = await say('greet-3', 'help me cancel my flight');
+    expect(res.agentHandoff).toBe(false);
+    expect(res.sessionState.currentFlow).toBe('CANCEL');
   });
 });
 

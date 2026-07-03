@@ -80,6 +80,71 @@ function resolveAirportCode(input: string): string {
 }
 
 
+/**
+ * Search flights for a date and write the options into the session (step 4 on
+ * success). Shared by the BOOK step-3 handler and the one-message booking path
+ * ("book mumbai to delhi on 2026-07-06"). Mutates `state`; returns the reply.
+ */
+async function presentFlightOptionsForDate(state: SessionState, inputDate: string): Promise<string> {
+  const flights = await bookingService.searchFlights(state.slots.origin!, state.slots.destination!, inputDate);
+  if (flights.length === 0) {
+    const range = await bookingService.routeDateRange(state.slots.origin!, state.slots.destination!);
+    if (!range) {
+      // Route has no upcoming flights at all — asking for more dates is a
+      // dead end; send the user back to pick a served destination.
+      const destinations = await bookingService.listDestinations(state.slots.origin!);
+      const reply = `Sorry, BlueWings has no upcoming flights from *${state.slots.origin} ➔ ${state.slots.destination}*. ✈️\n\n` +
+              `From *${state.slots.origin}* we currently serve: *${destinations.join(', ')}*.\n` +
+              `Please choose one of these destinations.`;
+      state.slots.destination = undefined;
+      state.step = 2;
+      return reply;
+    }
+    return `Sorry, no flights found from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*.\n\n` +
+           `Flights on this route are currently available between *${ymdIST(range.first)}* and *${ymdIST(range.last)}*. ` +
+           `Please try another date (YYYY-MM-DD), or type 'agent' to speak with a representative.`;
+  }
+
+  const flightOptions = flights.slice(0, 3);
+  state.slots.availableFlights = flightOptions.map(f => ({
+    id: f.id,
+    flightNumber: f.flightNumber,
+    departureTime: f.departureTime,
+    price: f.price
+  }));
+
+  let optionsText = `Here are the available flights from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*:\n\n`;
+  flightOptions.forEach((f, idx) => {
+    const depTime = new Date(f.departureTime).toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit'
+    });
+    optionsText += `*${idx + 1}. ${f.flightNumber}* | Departs: ${depTime} | Price: Rs. ${f.price}\n`;
+  });
+  optionsText += `\nReply with the flight number you'd like to book (e.g., *${flightOptions[0].flightNumber}*).`;
+  state.slots.date = inputDate;
+  state.step = 4;
+  return optionsText;
+}
+
+/** Format the passenger's bookings as a numbered trips list. */
+async function buildTripsReply(pnr: string): Promise<string> {
+  const trips = await bookingService.listTripsForPnr(pnr);
+  if (!trips || trips.length === 0) {
+    return `We couldn't find any trips linked to PNR *${pnr}*.`;
+  }
+  let text = `🧳 *Your Trips* (${trips.length})\n\n`;
+  trips.forEach((t, i) => {
+    const dep = new Date(t.flight.departureTime).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short'
+    });
+    const badge = t.status === 'CANCELLED' ? '❌' : t.status === 'RESCHEDULED' ? '🔄' : '✅';
+    text += `*${i + 1}. ${t.pnr}* ${badge} ${t.flight.flightNumber} ${t.flight.origin} ➔ ${t.flight.destination}\n` +
+            `    ${dep} · ${t.status}\n`;
+  });
+  text += `\nUse a PNR with 'status', 'reschedule', or 'cancel' to manage a trip.`;
+  return text;
+}
+
 /** Quick-reply chips for the current conversation point. */
 function buildSuggestions(result: MessageResult): string[] {
   if (result.agentHandoff) return ['Back to menu'];
@@ -107,7 +172,13 @@ export async function handleMessage(req: Request, res: Response) {
  * response. Called by the HTTP route and by channel adapters (e.g. WhatsApp).
  */
 export async function processIncomingMessage(payload: MessagePayload): Promise<MessageResult> {
+  // Proactive ops notices (e.g. flight delays) ride on top of the next reply.
+  // Consumed (read-and-cleared) before processing so it is delivered exactly once.
+  const notice = await sessionService.consumePendingNotice(payload.channel, payload.userId);
   const result = await processCore(payload);
+  if (notice) {
+    result.reply = `${notice}\n\n${result.reply}`;
+  }
   return { ...result, suggestions: buildSuggestions(result) };
 }
 
@@ -593,44 +664,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
           return { reply, sessionState: state, agentHandoff: false };
         }
 
-        const flights = await bookingService.searchFlights(state.slots.origin!, state.slots.destination!, inputDate);
-        if (flights.length === 0) {
-          const range = await bookingService.routeDateRange(state.slots.origin!, state.slots.destination!);
-          if (!range) {
-            // Route has no upcoming flights at all — asking for more dates is a
-            // dead end; send the user back to pick a served destination.
-            const destinations = await bookingService.listDestinations(state.slots.origin!);
-            reply = `Sorry, BlueWings has no upcoming flights from *${state.slots.origin} ➔ ${state.slots.destination}*. ✈️\n\n` +
-                    `From *${state.slots.origin}* we currently serve: *${destinations.join(', ')}*.\n` +
-                    `Please choose one of these destinations.`;
-            state.slots.destination = undefined;
-            state.step = 2;
-          } else {
-            reply = `Sorry, no flights found from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*.\n\n` +
-                    `Flights on this route are currently available between *${ymdIST(range.first)}* and *${ymdIST(range.last)}*. ` +
-                    `Please try another date (YYYY-MM-DD), or type 'agent' to speak with a representative.`;
-          }
-        } else {
-          const flightOptions = flights.slice(0, 3);
-          state.slots.availableFlights = flightOptions.map(f => ({
-            id: f.id,
-            flightNumber: f.flightNumber,
-            departureTime: f.departureTime,
-            price: f.price
-          }));
-
-          let optionsText = `Here are the available flights from ${state.slots.origin} to ${state.slots.destination} on *${inputDate}*:\n\n`;
-          flightOptions.forEach((f, idx) => {
-            const depTime = new Date(f.departureTime).toLocaleTimeString('en-IN', {
-              timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit'
-            });
-            optionsText += `*${idx + 1}. ${f.flightNumber}* | Departs: ${depTime} | Price: Rs. ${f.price}\n`;
-          });
-          optionsText += `\nReply with the flight number you'd like to book (e.g., *${flightOptions[0].flightNumber}*).`;
-          reply = optionsText;
-          state.slots.date = inputDate;
-          state.step = 4;
-        }
+        reply = await presentFlightOptionsForDate(state, inputDate);
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
         return { reply, sessionState: state, agentHandoff: false };
@@ -695,12 +729,17 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
           return { reply, sessionState: state, agentHandoff: false };
         }
 
-        // Simulated payment (always succeeds in this MVP)
-        const payment = await paymentService.processPayment(state.slots.price || 0);
+        // Simulated payment. Demo/test hook: phone numbers ending in 0000 are
+        // deterministically declined so the unhappy path can be shown live.
+        const payment = await paymentService.processPayment(state.slots.price || 0, {
+          simulateFailure: phone.endsWith('0000')
+        });
         if (!payment.success) {
-          reply = "Payment could not be processed. Please try again later or type 'agent' for assistance.";
-          state.currentFlow = null;
-          state.slots = {};
+          // Keep the flow (and everything already collected) alive for a retry —
+          // the user only needs to supply a different phone/payment number.
+          reply = `❌ *Payment Declined*\n\n${payment.failureReason || 'The payment could not be processed.'}\n\n` +
+                  `No money was taken and your details are saved. Please enter a different phone number to retry, ` +
+                  `or type 'agent' for assistance.`;
         } else {
           const booking = await bookingService.createBooking(state.slots.selectedFlightId!, {
             name: state.slots.passengerName!,
@@ -728,6 +767,58 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
           state.currentFlow = null;
           state.slots = {};
         }
+      }
+    }
+
+    else if (state.currentFlow === 'TRIPS') {
+      // 1. Collect any of the passenger's PNRs
+      if (!state.slots.pnr) {
+        const inputPnr = message.toUpperCase().replace(/\s+/g, '');
+        if (/^BW\d{4}$/.test(inputPnr)) {
+          state.slots.pnr = inputPnr;
+          state.step = 2;
+          if (isSessionVerifiedFor(state, inputPnr)) {
+            state.slots.lastName = state.auth.lastName;
+          } else {
+            reply = `I found PNR *${inputPnr}*. Please enter the passenger's last name to verify your identity.`;
+            await sessionService.updateSessionState(sessionId, state);
+            logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr);
+            return { reply, sessionState: state, agentHandoff: false };
+          }
+        } else {
+          reply = "Invalid PNR format. Please enter any of your PNRs in the format BW1234 (e.g., BW9001).";
+          await sessionService.updateSessionState(sessionId, state);
+          logger.logMessage('OUTBOUND', userId, reply);
+          return { reply, sessionState: state, agentHandoff: false };
+        }
+      }
+
+      // 2. Collect Last Name
+      if (state.slots.pnr && !state.slots.lastName) {
+        const inputLastName = message.trim();
+        if (inputLastName.length > 0) {
+          state.slots.lastName = inputLastName;
+        } else {
+          reply = "Please enter a valid passenger last name.";
+          await sessionService.updateSessionState(sessionId, state);
+          logger.logMessage('OUTBOUND', userId, reply);
+          return { reply, sessionState: state, agentHandoff: false };
+        }
+      }
+
+      // 3. Verify and list all trips
+      if (state.slots.pnr && state.slots.lastName) {
+        const statusResult = await bookingService.checkBookingStatus(state.slots.pnr, state.slots.lastName);
+        if (!statusResult) {
+          reply = `We couldn't find any booking with PNR *${state.slots.pnr}*. Please start over by typing 'my trips'.`;
+        } else if (statusResult.matchError) {
+          reply = `The passenger last name did not match our records for PNR *${state.slots.pnr}*. Please start over by typing 'my trips'.`;
+        } else {
+          state.auth = { pnr: state.slots.pnr, lastName: state.slots.lastName, verified: true };
+          reply = await buildTripsReply(state.slots.pnr);
+        }
+        state.currentFlow = null;
+        state.slots = {};
       }
     }
 
@@ -798,10 +889,57 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
         }
       }
       
+      else if (intent === 'MY_TRIPS') {
+        if (state.auth.verified && state.auth.pnr) {
+          // Already verified this session — answer immediately.
+          reply = await buildTripsReply(state.auth.pnr);
+        } else {
+          state.currentFlow = 'TRIPS';
+          if (parsed.slots.pnr) {
+            state.slots.pnr = parsed.slots.pnr;
+            state.step = 2;
+            reply = `I found PNR *${state.slots.pnr}* in your request. Please enter the passenger's last name to verify your identity.`;
+          } else {
+            state.step = 1;
+            reply = "Happy to show your trips! 🧳 Please enter any of your PNRs (booking reference, e.g., BW9001) so I can verify you.";
+          }
+        }
+      }
+
       else if (intent === 'BOOK') {
         state.currentFlow = 'BOOK';
-        state.step = 1;
-        reply = "Great, let's book a new flight! ✈️\n\nWhich city are you flying *from*? Please reply with the city name (e.g., Mumbai, Delhi) or its 3-letter airport code (e.g., BOM, DEL).";
+
+        // One-message booking: pre-fill any origin/destination/date the intent
+        // parser extracted ("book mumbai to delhi on 2026-07-06"), validating
+        // each against served routes. Invalid slots are silently dropped — the
+        // flow simply asks for them step by step as usual.
+        if (parsed.slots.origin) {
+          const code = resolveAirportCode(String(parsed.slots.origin));
+          if (/^[A-Z]{3}$/.test(code) && (await bookingService.listDestinations(code)).length > 0) {
+            state.slots.origin = code;
+          }
+        }
+        if (state.slots.origin && parsed.slots.destination) {
+          const code = resolveAirportCode(String(parsed.slots.destination));
+          const served = await bookingService.listDestinations(state.slots.origin);
+          if (/^[A-Z]{3}$/.test(code) && code !== state.slots.origin && served.includes(code)) {
+            state.slots.destination = code;
+          }
+        }
+
+        if (!state.slots.origin) {
+          state.step = 1;
+          reply = "Great, let's book a new flight! ✈️\n\nWhich city are you flying *from*? Please reply with the city name (e.g., Mumbai, Delhi) or its 3-letter airport code (e.g., BOM, DEL).";
+        } else if (!state.slots.destination) {
+          state.step = 2;
+          reply = `Great, let's book a new flight! ✈️ Flying from *${state.slots.origin}*.\n\nWhich city are you flying *to*? Reply with the city name or its 3-letter airport code.`;
+        } else if (parsed.slots.date && /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.slots.date))) {
+          state.step = 3;
+          reply = await presentFlightOptionsForDate(state, String(parsed.slots.date));
+        } else {
+          state.step = 3;
+          reply = `Great, *${state.slots.origin} ➔ ${state.slots.destination}*. What date would you like to fly? (Use format *YYYY-MM-DD*, e.g., 2026-07-05).`;
+        }
       }
 
       else {

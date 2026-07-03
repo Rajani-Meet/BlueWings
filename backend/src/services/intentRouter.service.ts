@@ -7,7 +7,9 @@ export type Intent =
   | 'BOOK'
   | 'RESCHEDULE'
   | 'CANCEL'
+  | 'MY_TRIPS'
   | 'AGENT_HANDOFF'
+  | 'MENU'
   | 'UNKNOWN';
 
 export interface IntentResult {
@@ -22,7 +24,7 @@ const LLM_CONFIDENCE_THRESHOLD = 0.55;
 
 // zod schema — the LLM output is validated against this before it is ever used.
 const LlmIntentSchema = z.object({
-  intent: z.enum(['CHECK_STATUS', 'BOOK', 'RESCHEDULE', 'CANCEL', 'AGENT_HANDOFF', 'UNKNOWN']),
+  intent: z.enum(['CHECK_STATUS', 'BOOK', 'RESCHEDULE', 'CANCEL', 'MY_TRIPS', 'AGENT_HANDOFF', 'UNKNOWN']),
   confidence: z.number().min(0).max(1),
   slots: z
     .object({
@@ -67,35 +69,53 @@ export function keywordParseIntent(message: string): IntentResult {
     intent = 'AGENT_HANDOFF';
   }
   // 2. Cancel BEFORE book — "cancel my booking" contains the substring "book".
+  //    ('radd' = Hinglish for cancel)
   else if (
     normalized.includes('cancel') ||
     normalized.includes('refund') ||
-    normalized.includes('void')
+    normalized.includes('void') ||
+    normalized.includes('radd')
   ) {
     intent = 'CANCEL';
   }
   // 3. Reschedule BEFORE book — "reschedule my booking" also contains "book".
+  //    ('badal' = Hinglish for change)
   else if (
     normalized.includes('reschedule') ||
     normalized.includes('change') ||
     normalized.includes('modify') ||
     normalized.includes('postpone') ||
-    normalized.includes('different flight')
+    normalized.includes('different flight') ||
+    normalized.includes('badal')
   ) {
     intent = 'RESCHEDULE';
   }
-  // 4. Check booking status
+  // 4. Check booking status ('kab'/'kahan' = Hinglish when/where)
   else if (
     normalized.includes('status') ||
     normalized.includes('details') ||
     normalized.includes('gate') ||
     normalized.includes('timing') ||
     normalized.includes('time') ||
-    normalized.includes('where is my')
+    normalized.includes('where is my') ||
+    /\bkab\b/.test(normalized) ||
+    /\bkahan\b/.test(normalized)
   ) {
     intent = 'CHECK_STATUS';
   }
-  // 5. Book a flight (last, so more-specific action words win first)
+  // 5. My trips — after the action verbs (so "cancel my booking" stays CANCEL)
+  // but before BOOK ("my bookings"/"my flights" contain BOOK keywords).
+  else if (
+    normalized.includes('my bookings') ||
+    normalized.includes('my trips') ||
+    normalized.includes('my flights') ||
+    normalized.includes('list bookings') ||
+    normalized.includes('show bookings') ||
+    normalized.includes('all bookings')
+  ) {
+    intent = 'MY_TRIPS';
+  }
+  // 6. Book a flight (last, so more-specific action words win first)
   else if (
     normalized.includes('book') ||
     normalized.includes('reserve') ||
@@ -104,6 +124,19 @@ export function keywordParseIntent(message: string): IntentResult {
     normalized.includes('new ticket')
   ) {
     intent = 'BOOK';
+  }
+
+  // One-message booking slots: "<origin> to <destination>" and a YYYY-MM-DD date.
+  // Extraction is permissive — the controller validates against served routes and
+  // silently drops anything that doesn't resolve to a real airport.
+  if (intent === 'BOOK') {
+    const dateMatch = message.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+    if (dateMatch) slots.date = dateMatch[1];
+    const routeMatch = normalized.match(/(?:from\s+)?([a-z]{3,})\s+to\s+([a-z]{3,})/);
+    if (routeMatch) {
+      slots.origin = routeMatch[1];
+      slots.destination = routeMatch[2];
+    }
   }
 
   return {
@@ -122,14 +155,19 @@ Intents:
 - BOOK: user wants to book/search a NEW flight.
 - RESCHEDULE: user wants to change/postpone an existing booking to a different flight/date.
 - CANCEL: user wants to cancel an existing booking or asks about a refund.
-- AGENT_HANDOFF: user asks for a human/agent/representative, or the request is outside the four flows above.
-- UNKNOWN: the message is unclear, empty, or you cannot confidently classify it.
+- MY_TRIPS: user wants a list/overview of ALL their bookings or upcoming trips ("show my bookings", "what trips do I have").
+- AGENT_HANDOFF: user EXPLICITLY asks for a human/agent/representative, or has a concrete request outside the flows above.
+- UNKNOWN: the message is unclear, empty, or you cannot confidently classify it. Bare greetings ("hi", "hello"), thanks, or generic help requests with no specific ask ("help", "can you assist me?") are UNKNOWN — never AGENT_HANDOFF.
 
 Slots to extract when present:
 - pnr: a booking reference like BW9001 (format BW followed by 4 digits).
 - lastName: a passenger last name.
 - origin, destination: 3-letter airport codes (e.g., BOM, DEL, BLR).
 - date: a travel date in YYYY-MM-DD format.
+
+Users may write in Hindi or Hinglish (romanized Hindi) — classify these exactly the same way. Examples:
+"meri flight cancel karni hai" / "ticket radd karo" = CANCEL; "flight badalni hai" / "flight aage karo" = RESCHEDULE;
+"meri flight kab hai" / "flight kahan se hai" = CHECK_STATUS; "mujhe delhi jana hai" / "flight book karni hai" = BOOK.
 
 Respond with ONLY a JSON object, no prose, of the form:
 {"intent":"CHECK_STATUS","confidence":0.0-1.0,"slots":{"pnr":"...","lastName":"...","origin":"...","destination":"...","date":"..."}}
@@ -221,11 +259,24 @@ async function llmParseIntent(message: string): Promise<IntentResult | null> {
 }
 
 /**
+ * Bare greetings and generic help requests show the menu — never the agent
+ * queue and never a "failed parse". Anchored full-match, so a message with an
+ * actual ask ("help me cancel my flight") still reaches the LLM/keyword router.
+ */
+const GREETING_HELP_REGEX =
+  /^(hi+|hello+|hey+|yo|namaste|good\s*(morning|afternoon|evening)|(please\s*)?help(\s*me)?|i\s*need\s*help|can\s*you\s*help(\s*me)?|what\s*can\s*you\s*do|how\s*does\s*this\s*work|menu|start|get\s*started|options|thanks|thank\s*you)[\s!.?]*$/i;
+
+/**
  * Public entrypoint. Tries the LLM first (if configured); falls back to the
  * deterministic keyword router on outage, timeout, invalid output, or low confidence.
  */
 export async function parseIntent(message: string): Promise<IntentResult> {
   logger.info(`Parsing intent for message: "${message}"`);
+
+  if (GREETING_HELP_REGEX.test(message.trim())) {
+    logger.info('Intent via greeting/help pre-check: MENU');
+    return { intent: 'MENU', confidence: 1.0, slots: {}, source: 'keyword' };
+  }
 
   const llm = await llmParseIntent(message);
   if (llm && llm.intent !== 'UNKNOWN' && llm.confidence >= LLM_CONFIDENCE_THRESHOLD) {
