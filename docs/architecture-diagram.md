@@ -25,10 +25,11 @@ graph TD
 
     subgraph backend [backend container :4000]
         ROUTE[Express routes]
-        CTRL[message.controller<br/>processIncomingMessage]
+        CTRL[message.controller<br/>processIncomingMessage<br/>+ suggestions + ticketUrl]
         INTENT[intentRouter service<br/>OpenRouter LLM + keyword fallback]
         FLOWS[Dialogue state machine<br/>CHECK_STATUS / BOOK / RESCHEDULE / CANCEL]
         SVC[booking / auth / payment /<br/>session / agentHandoff services]
+        TICKET[ticket route + service<br/>GET /api/ticket/:pnr → PDF]
         ADAPT[whatsapp.adapter<br/>fallback direct webhook]
     end
 
@@ -41,6 +42,7 @@ graph TD
     PWA --> NEXT -->|proxied| ROUTE
     ROUTE --> CTRL --> INTENT --> OR
     CTRL --> FLOWS --> SVC --> DB
+    ROUTE --> TICKET --> DB
     CALLBE --> ROUTE
     ADAPT -.->|no-n8n fallback| CTRL
 ```
@@ -52,6 +54,13 @@ graph TD
 - **LLM with a deterministic safety net.** OpenRouter (comma-separated model fallback list, max 3) parses intent; output is zod-validated. On timeout (9s), non-200, invalid JSON, or confidence < 0.55, a keyword router takes over — an LLM outage never breaks a flow. Mid-flow inputs (slot values like "BOM" or "yes") skip the LLM entirely.
 - **Dialogue state in the database.** `ConversationSession` stores flow, step, slots, and the handoff flag per (channel, userId), so conversations survive restarts and work identically across channels.
 - **All booking mutations in `prisma.$transaction()`** — no partial writes.
+- **Verify once per session.** A successful PNR + last-name check is stored in
+  `ConversationSession.auth`; servicing the same PNR again skips re-auth, and a
+  fresh booking marks its PNR verified.
+- **CX extras ride on the same response.** `suggestions` (quick-reply chips) and
+  `ticketUrl` (on-demand PDF e-ticket, re-authenticated by the endpoint) are
+  channel-optional fields — the PWA renders them, WhatsApp falls back to
+  numbered text options.
 
 ## Conversation lifecycle
 
