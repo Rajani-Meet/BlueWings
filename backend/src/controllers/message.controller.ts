@@ -11,11 +11,9 @@ export interface MessageResult {
   reply: string;
   sessionState: SessionState;
   agentHandoff: boolean;
-  /** Quick-reply chips for channels that support them (PWA renders buttons; WhatsApp ignores). */
   suggestions?: string[];
-  /** Relative URL of the downloadable e-ticket PDF, set when a booking was just
-   *  confirmed, rescheduled, or looked up (PWA renders a download button). */
   ticketUrl?: string;
+  imageUrl?: string;
 }
 
 /** Download link for the e-ticket endpoint, pre-authorized with the verified last name. */
@@ -269,6 +267,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
     let reply = '';
     let agentHandoff = false;
     let ticketUrl: string | undefined;
+    let imageUrl: string | undefined;
 
     // 3. Parse intent and slots from the user message.
     // Mid-flow, inputs are slot values ("BOM", "Doe", "yes") consumed by the state
@@ -808,7 +807,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
 
         await sessionService.updateSessionState(sessionId, state);
         logger.logMessage('OUTBOUND', userId, reply);
-        return { reply, sessionState: state, agentHandoff: false };
+        return { reply, sessionState: state, agentHandoff: false, imageUrl: '/seat-map.png' };
       }
 
       // 8. Seat Selection and Payment
@@ -831,7 +830,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
             reply = `Invalid or occupied seat. Please reply with one of the available seats listed:\n\n${available.join(', ')}`;
             await sessionService.updateSessionState(sessionId, state);
             logger.logMessage('OUTBOUND', userId, reply);
-            return { reply, sessionState: state, agentHandoff: false };
+            return { reply, sessionState: state, agentHandoff: false, imageUrl: '/seat-map.png' };
           }
           seat = input;
           state.slots.seatNumber = seat;
@@ -884,6 +883,9 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
           reply = `❌ *Payment Declined*\n\n${payment.failureReason || 'The payment could not be processed.'}\n\n` +
                   `No money was taken. We have saved your seat selection *${seat}*. Please enter a different phone number to retry payment, ` +
                   `or type 'agent' for assistance.`;
+          await sessionService.updateSessionState(sessionId, state);
+          logger.logMessage('OUTBOUND', userId, reply);
+          return { reply, sessionState: state, agentHandoff: false, imageUrl: '/seat-map.png' };
         } else {
           const booking = await bookingService.createBooking(
             state.slots.selectedFlightId!,
@@ -1104,7 +1106,7 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
     await sessionService.updateSessionState(sessionId, state);
     logger.logMessage('OUTBOUND', userId, reply, state.slots.pnr, state.slots.lastName);
 
-    return { reply, sessionState: state, agentHandoff, ticketUrl };
+    return { reply, sessionState: state, agentHandoff, ticketUrl, imageUrl };
 
   } catch (error: any) {
     // The bot must never go silent: any unexpected failure gets a friendly reply.

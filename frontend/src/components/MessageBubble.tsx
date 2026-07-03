@@ -8,6 +8,7 @@ export interface MessageBubbleProps {
   time: string;
   /** When set, renders a download button for the e-ticket PDF under the text. */
   ticketUrl?: string;
+  imageUrl?: string;
 }
 
 /** Render WhatsApp-style *bold* spans without dangerouslySetInnerHTML. */
@@ -21,7 +22,7 @@ function renderWhatsAppText(text: string): React.ReactNode[] {
   });
 }
 
-export default function MessageBubble({ role, text, time, ticketUrl }: MessageBubbleProps) {
+export default function MessageBubble({ role, text, time, ticketUrl, imageUrl }: MessageBubbleProps) {
   return (
     <div className={`bubble-row ${role}`}>
       {role === 'bot' && (
@@ -30,6 +31,9 @@ export default function MessageBubble({ role, text, time, ticketUrl }: MessageBu
         </div>
       )}
       <div className={`bubble ${role}`}>
+        {imageUrl && (
+          <img src={imageUrl} alt="Seat Map" style={{ maxWidth: '100%', borderRadius: 8, marginBottom: 8, display: 'block' }} />
+        )}
         <span>{renderWhatsAppText(text)}</span>
         {ticketUrl && (
           <a className="ticket-btn" href={ticketUrl} download>
