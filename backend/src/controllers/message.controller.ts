@@ -53,7 +53,7 @@ function generateSeatMap(occupiedSeats: Set<string>) {
   mapLines.push('💺 *SEAT MAP*');
   mapLines.push('`[ ]` = Available | `[X]` = Occupied\n');
   
-  mapLines.push('👑 *Premium (+Rs. 800)*');
+  mapLines.push('👑 *Premium (Window: Rs. 1000 / Aisle: Rs. 900 / Middle: Rs. 800)*');
   for (let r of [1, 2]) {
     let rowParts: string[] = [];
     for (let c of cols) {
@@ -69,7 +69,7 @@ function generateSeatMap(occupiedSeats: Set<string>) {
     mapLines.push(`Row ${r}: ${rowParts.join(' ')}`);
   }
   
-  mapLines.push('\n✈️ *Standard (Window +Rs. 300 / Aisle +Rs. 200 / Middle +Rs. 0)*');
+  mapLines.push('\n✈️ *Standard (Window: Rs. 300 / Aisle: Rs. 200 / Middle: Rs. 0)*');
   for (let r of [3, 4, 5]) {
     let rowParts: string[] = [];
     for (let c of cols) {
@@ -845,11 +845,19 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
         const row = parseInt(seat.charAt(0), 10);
         const col = seat.charAt(1);
         let adjustment = 0;
-        let category = 'Standard Middle';
+        let category = '';
 
         if (row <= 2) {
-          adjustment = 800;
-          category = 'Premium';
+          if (col === 'A' || col === 'F') {
+            adjustment = 1000;
+            category = 'Premium Window';
+          } else if (col === 'C' || col === 'D') {
+            adjustment = 900;
+            category = 'Premium Aisle';
+          } else {
+            adjustment = 800;
+            category = 'Premium Middle';
+          }
         } else {
           if (col === 'A' || col === 'F') {
             adjustment = 300;
