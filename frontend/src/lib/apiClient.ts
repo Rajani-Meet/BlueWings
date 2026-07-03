@@ -6,6 +6,7 @@ export interface BotResponse {
   suggestions?: string[];
   /** Relative URL of a downloadable e-ticket PDF (after booking/reschedule/status). */
   ticketUrl?: string;
+  imageUrl?: string;
 }
 
 export async function sendMessage(
