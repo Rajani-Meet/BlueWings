@@ -97,6 +97,25 @@ curl -X POST http://localhost:4000/api/message -H 'Content-Type: application/jso
 
 ---
 
+## POST /api/ops/simulate-delay/:pnr
+
+Ops/demo tool (no auth in the MVP): delays the flight behind a PNR and
+proactively notifies affected passengers — an immediate WhatsApp push, plus a
+notice that rides on top of their next chat reply on any channel.
+
+```bash
+curl -X POST http://localhost:4000/api/ops/simulate-delay/BW9001 \
+  -H 'Content-Type: application/json' -d '{"minutes": 90}'
+```
+
+Response: `{ flight, delayedByMinutes, newDeparture, affectedBookings, whatsappPushes, sessionNotices }`.
+`400` bad PNR format, `404` unknown PNR.
+
+## Rate limiting
+
+`/api/message` allows **30 requests/minute per IP**. Beyond that it returns
+`429` with a friendly bot-style `reply` (the UI shows it like any message).
+
 ## WhatsApp webhooks
 
 ### Primary: n8n workflow — `http://localhost:5679/webhook/whatsapp`
@@ -105,6 +124,12 @@ curl -X POST http://localhost:4000/api/message -H 'Content-Type: application/jso
 |---|---|
 | `GET` | Meta verification: echoes `hub.challenge` when `hub.verify_token` matches `WHATSAPP_VERIFY_TOKEN`, else responds `Forbidden`. |
 | `POST` | Acks `200` immediately, translates `entry[].changes[].value.messages[]`, calls `POST /api/message`, sends the reply via Graph API `POST /v20.0/{PHONE_NUMBER_ID}/messages`. |
+
+Replies with `suggestions` become **native interactive messages**: reply
+buttons for ≤3 chips, a list message for 4-10 (text fallback for long bodies).
+Inbound button/list taps are translated back to their title text, so they route
+through intent parsing exactly like typed messages. Both webhook paths (n8n and
+Express) implement this identically.
 
 ### Fallback: Express adapter — `http://localhost:4000/api/webhook/whatsapp`
 

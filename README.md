@@ -26,6 +26,15 @@ shell), and shows typing indicators in a WhatsApp-style UI.
 *Download e-ticket* button after booking, rescheduling, or a status check, so a
 lost ticket is one message away.
 
+**More CX**: one-message booking (*"book mumbai to delhi on 2026-07-06"* jumps
+straight to flight options); native **WhatsApp reply buttons / list messages**
+from the same suggestions the PWA renders as chips; **"my trips"** overview after
+one verification; **Hinglish** input (*"meri ticket radd karo"*); a simulated
+**declined-payment retry** path (phone ending 0000); and **proactive delay
+notifications** (`POST /api/ops/simulate-delay/:pnr` → WhatsApp push + a notice
+on the next chat turn). `/api/message` is rate-limited (30/min/IP) and CI runs
+tsc + the test suite on every push.
+
 ## Tech stack
 
 | Layer | Tech |
