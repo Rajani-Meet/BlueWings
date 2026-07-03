@@ -120,7 +120,14 @@ export async function handleWhatsAppWebhook(req: Request, res: Response) {
         userId: msg.from,
         message: msg.text
       });
-      await sendWhatsAppMessage(msg.from, result.reply, result.suggestions);
+      
+      let reply = result.reply;
+      if (result.ticketUrl) {
+        const baseUrl = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+        reply += `\n\n📄 Download your e-ticket here:\n${baseUrl}${result.ticketUrl}`;
+      }
+
+      await sendWhatsAppMessage(msg.from, reply, result.suggestions);
     }
   } catch (error: any) {
     // Already acked; just log. processIncomingMessage itself never throws.
