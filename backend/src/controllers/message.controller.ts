@@ -800,7 +800,6 @@ async function processCore(payload: MessagePayload): Promise<MessageResult> {
         state.slots.availableSeatList = availableSeats; // save for suggestions and validation
 
         reply = `Thanks! Now, let's select your seat. Here is the seat map for Flight *${state.slots.selectedFlightNumber}*:\n\n` +
-                `${seatMapText}\n\n` +
                 `*Available Seats*:\n` +
                 `${availableSeats.join(', ')}\n\n` +
                 `Reply with the seat number you'd like to book (e.g., *3A*).`;
