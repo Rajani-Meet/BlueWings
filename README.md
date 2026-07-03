@@ -102,4 +102,17 @@ docs/       architecture diagram, API docs, DB schema
 scripts/    local dev runner
 ```
 
-See [docs/architecture-diagram.md](docs/architecture-diagram.md), [docs/api-documentation.md](docs/api-documentation.md), [docs/database-schema.md](docs/database-schema.md), [ASSUMPTIONS.md](ASSUMPTIONS.md), and [FUTURE_ENHANCEMENTS.md](FUTURE_ENHANCEMENTS.md).
+## Documentation / submission deliverables
+
+| Deliverable | File |
+|---|---|
+| Architecture diagram | [docs/architecture-diagram.md](docs/architecture-diagram.md) |
+| Customer journey | [docs/customer-journey.md](docs/customer-journey.md) |
+| API documentation | [docs/api-documentation.md](docs/api-documentation.md) |
+| Database schema | [docs/database-schema.md](docs/database-schema.md) |
+| Assumptions | [ASSUMPTIONS.md](ASSUMPTIONS.md) |
+| AI tools used | [docs/ai-tools-used.md](docs/ai-tools-used.md) |
+| Presentation deck | [docs/presentation.md](docs/presentation.md) |
+| 5-minute demo script | [docs/demo-script.md](docs/demo-script.md) |
+| Deployment guide | [docs/deployment.md](docs/deployment.md) |
+| Future enhancements | [FUTURE_ENHANCEMENTS.md](FUTURE_ENHANCEMENTS.md) |

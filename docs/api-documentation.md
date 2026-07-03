@@ -60,7 +60,22 @@ Validated with zod (`MessagePayloadSchema`). Invalid payloads → `400 {"error":
   `resume`) leaves the queue, resets the session, and returns to the bot.
 - `ticketUrl` (optional) is a relative link to the PDF e-ticket, returned after a
   successful booking, reschedule, or status check of a non-cancelled booking. The
-  PWA renders it as a download button; WhatsApp ignores it.
+  PWA renders it as a download button; on WhatsApp the adapter appends a fully
+  qualified download link to the reply text.
+- `imageUrl` (optional) is a relative link to an illustrative image for the
+  current step — set during **seat selection** (`/seat-map.png`). The PWA renders
+  it inline in the chat bubble; WhatsApp shows the text seat list instead.
+
+### Booking sub-flow: seat selection
+
+After passenger details + phone, Book enters seat selection before payment:
+the bot shows the seat map (rows 1–5 × A–F, occupied seats read live from other
+bookings) and the list of available seats. The reply carries the seat labels as
+`suggestions` and `imageUrl: "/seat-map.png"`. The chosen seat sets a price
+adjustment (Premium rows 1–2: +₹800–1000; Standard rows 3–5: +₹0–300); the total
+is charged via simulated payment and stored as `Booking.seatNumber` /
+`Booking.pricePaid`. A declined payment (phone ending `0000`) keeps the selected
+seat so the user only re-enters a payment number.
 
 ## GET /api/ticket/:pnr?lastName=<name>
 

@@ -267,6 +267,32 @@ describe('Flow 2: book a new flight (search -> select -> pay -> PNR)', () => {
     await prisma.booking.delete({ where: { id: booking!.id } });
     await prisma.passenger.delete({ where: { id: booking!.passengerId } });
   });
+
+  it('rejects an invalid/occupied seat, then prices a premium seat correctly', async () => {
+    await say('book-10', `book testcitya to testcityb on ${ymd(daysFromNow(1, 0))}`);
+    await say('book-10', 'TS901');
+    await say('book-10', 'Premium Flyer');
+    await say('book-10', 'premium.flyer@example.com');
+    await say('book-10', '+911234511111'); // -> seat map
+
+    // A seat not on the map is rejected, flow stays on seat selection
+    const bad = await say('book-10', '9Z');
+    expect(bad.reply).toContain('Invalid or occupied seat');
+    expect(bad.sessionState.currentFlow).toBe('BOOK');
+
+    // 1A = Premium Window (+Rs. 1000) on a base fare of 5000
+    const confirmed = await say('book-10', '1A');
+    expect(confirmed.reply).toContain('Booking Confirmed');
+    expect(confirmed.reply).toContain('Seat*: 1A (Premium Window)');
+    expect(confirmed.reply).toContain('Amount Paid*: Rs. 6000');
+
+    const pnr = confirmed.reply.match(/PNR\*?: (BW\d{4})/)![1];
+    const booking = await prisma.booking.findUnique({ where: { pnr } });
+    expect(booking!.seatNumber).toBe('1A');
+    expect(booking!.pricePaid).toBe(6000);
+    await prisma.booking.delete({ where: { id: booking!.id } });
+    await prisma.passenger.delete({ where: { id: booking!.passengerId } });
+  });
 });
 
 

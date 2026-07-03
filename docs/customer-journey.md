@@ -26,8 +26,9 @@ flowchart TD
         B1[Origin city/code] --> B2[Destination] --> B3[Date]
         B3 --> B4["Pick from live options<br/>(number, time, fare)"]
         B4 --> B5[Passenger name, email, phone]
-        B5 --> B6["Simulated payment"]
-        B6 --> B7["PNR issued + PDF e-ticket<br/>session marked verified"]
+        B5 --> B6["Seat map + tiered pricing<br/>(pick a seat)"]
+        B6 --> B7["Simulated payment<br/>(declined → retry, seat kept)"]
+        B7 --> B8["PNR issued + PDF e-ticket<br/>session marked verified"]
     end
 
     subgraph FLOW3 [3 — Reschedule]
@@ -48,7 +49,7 @@ flowchart TD
     end
 
     S3 --> MENU
-    B7 --> MENU
+    B8 --> MENU
     R5 --> MENU
     C4 --> MENU
 ```
@@ -69,12 +70,18 @@ PNR asks again. A new booking marks its PNR verified automatically.
 
 ### Journey 2 — Booking (~90 seconds)
 1. *"book a flight"* → the bot asks origin. City names work (*"mumbai"* → BOM).
+   (Power users can do it in one line: *"book mumbai to delhi on 2026-07-06"*.)
 2. Destination, then date (`YYYY-MM-DD`). Unserved routes/dates get a helpful
    answer (which airports we fly from, which dates have flights) instead of a dead end.
 3. She picks a flight from the numbered options, gives name → email → phone.
-4. Payment is simulated; the bot confirms with **PNR, fare, transaction ref** and
-   the PDF e-ticket. Her session is now verified for that PNR — follow-up
-   servicing needs no re-auth.
+4. **Seat selection**: the bot shows a seat map (with an image on the PWA) and the
+   available seats; each seat is priced by class (premium vs standard, window/aisle/
+   middle). She taps one.
+5. Payment is simulated on the fare + seat total; a decline (test path) keeps her
+   seat and just asks for another payment number.
+6. The bot confirms with **PNR, seat, total paid, transaction ref** and the PDF
+   e-ticket. Her session is now verified for that PNR — follow-up servicing needs
+   no re-auth.
 
 ### Journey 3 — Plans changed (reschedule, ~45 seconds)
 1. *"reschedule my flight BW9002"* → last-name check (skipped if already verified).
